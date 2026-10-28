@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  .watch { width: 240px; height: 240px; border-radius: 9999px; background:#000; position:relative; overflow:hidden;
+           box-shadow: 0 0 0 10px #1f1f1f, 0 0 0 12px #3a3a3a, 0 12px 30px rgba(0,0,0,.45); color:#E3E3E3;
+           font-family: "Google Sans Flex", "Google Sans", Roboto, system-ui, sans-serif; }
+  .watch * { line-height: 1.15; }
+  .crown { position:absolute; right:-22px; top:100px; width:10px; height:40px; background:#3a3a3a; border-radius:4px; }
+  .wc { position:absolute; inset:0; }
+  .scroll { overflow-y:auto; scrollbar-width:none; }
+  .scroll::-webkit-scrollbar { display:none; }
+  .bounce { animation: b 1.6s ease-in-out infinite; }
+  @keyframes b { 0%,100%{transform:translateY(0)} 50%{transform:translateY(4px)} }
+  .mapsvg { cursor: grab; touch-action:none; }
+  .mapsvg:active { cursor: grabbing; }
+  .tap { cursor:pointer; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:9999px; border:1px solid var(--border); color:var(--muted-foreground); }
+</style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-6">
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center gap-3 flex-wrap">
+    <h1 class="text-2xl font-semibold">Tile & Screen Workshop: Bike Navigator</h1>
+    <span class="badge">Revision 2 · Material 3 for Wear OS</span>
+  </div>
+  <p class="text-sm text-[var(--muted-foreground)] mt-1">Material 3 for Wear OS: tonal color roles, full-pill shapes, an edge button that hugs the bottom of the round screen, and a time label at the top. The navigation green is a <i>tertiary</i> color role, a nod to Google Maps.</p>
+
+  <div id="tabs" class="flex flex-wrap gap-2 mt-5"></div>
+
+  <div class="mt-4 bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 flex flex-wrap gap-6 items-center text-sm">
+    <label class="flex items-center gap-2">Turn
+      <select id="turn" class="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1">
+        <option value="left">Left</option><option value="right" selected>Right</option>
+        <option value="slight_left">Slight left</option><option value="slight_right">Slight right</option>
+        <option value="straight">Continue</option><option value="arrive">Arrive</option>
+      </select>
+    </label>
+    <label class="flex items-center gap-2">Distance to turn
+      <input id="dist" type="range" min="0" max="600" value="180" class="w-40">
+      <span id="distLabel" class="w-14 tabular-nums"></span>
+    </label>
+    <label class="flex items-center gap-2">Units
+      <select id="units" class="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1">
+        <option value="metric">Metric</option><option value="imperial">Imperial</option>
+      </select>
+    </label>
+    <label class="flex items-center gap-2 cursor-pointer select-none">
+      <input id="aod" type="checkbox" class="w-4 h-4"> Always-On Display (ambient)
+    </label>
+  </div>
+
+  <div id="stateIntro" class="mt-4 text-sm text-[var(--muted-foreground)]"></div>
+  <div id="grid" class="grid gap-6 mt-4" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));"></div>
+
+  <div class="mt-8 grid md:grid-cols-2 gap-4">
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 text-sm">
+      <h3 class="font-semibold mb-2">Decisions so far</h3>
+      <ul class="list-disc pl-5 space-y-1 text-[var(--muted-foreground)]">
+        <li><b class="text-[var(--foreground)]">Idle tile:</b> Home · <b>Search</b> · Work. Gym and "More places" removed. A chevron leads to Recent trips.</li>
+        <li><b class="text-[var(--foreground)]">Navigating:</b> Maps-classic turn card. The Ride screen adds a <b>Map view</b> you can drag, switched with an edge button.</li>
+        <li><b class="text-[var(--foreground)]">No glance test.</b> The Ride screen stays visible on the Always-On Display, kept alive by an Ongoing Activity.</li>
+        <li><b class="text-[var(--foreground)]">More generous rerouting:</b> automatic after 15 s off route, at most 1 reroute per 20 s, up to 10 per trip.</li>
+        <li><b class="text-[var(--foreground)]">Arrived</b> and <b class="text-[var(--foreground)]">Phone disconnected</b> are approved as they are.</li>
+      </ul>
+    </div>
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 text-sm">
+      <h3 class="font-semibold mb-2">Platform constraints shaping these designs</h3>
+      <ul class="list-disc pl-5 space-y-1 text-[var(--muted-foreground)]">
+        <li><b class="text-[var(--foreground)]">Tiles can't scroll and can't host a live map.</b> The tile chevron opens the app's start screen, scrolled to Recents. The draggable map lives on the Ride screen.</li>
+        <li><b class="text-[var(--foreground)]">Tiles don't appear on the Always-On Display</b>; the watch face does. Always-on navigation is the Ride screen in ambient mode.</li>
+        <li><b class="text-[var(--foreground)]">Map:</b> the Google Maps SDK for Android supports Wear OS and ambient mode. Mobile SDK map loads cost nothing, but it needs a separate Maps API key.</li>
+        <li><b class="text-[var(--foreground)]">Ambient rules:</b> mostly black pixels, no filled color blocks, no buttons. Content shifts slightly to protect the screen from burn-in, and updates come about once per GPS fix.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- M3 Wear dark color roles (baseline-ish) ----------
+const C = {
+  primary:"#A8C7FA", onPrimary:"#062E6F", primaryContainer:"#284A7E", onPrimaryContainer:"#D3E3FD",
+  tertiary:"#6DD58C", tertiaryContainer:"#146C2E", onTertiaryContainer:"#C4EED0", tertiaryDim:"#0F5223",
+  error:"#F2B8B5", errorContainer:"#8C1D18", amber:"#E37400", amberOn:"#FFDDB3",
+  surfaceC:"#1E1F22", surfaceCHigh:"#2A2B2F", onSurface:"#E3E3E3", onSurfaceVar:"#C4C7C5", outline:"#8E918F", outlineVar:"#444746",
+};
+const S = { turn:"right", dist:180, units:"metric", state:"nav", aod:false, rideView:"turn", pan:{x:0,y:0}, zoom:1 };
+
+// ---------- icons ----------
+function arrow(type, size, color="#fff", sw=5) {
+  const p = {
+    left:`<path d="M30 42V22a4 4 0 0 0-4-4H12"/><path d="M18 11l-7 7 7 7"/>`,
+    right:`<path d="M18 42V22a4 4 0 0 1 4-4h14"/><path d="M30 11l7 7-7 7"/>`,
+    slight_left:`<path d="M30 42V28L16 12"/><path d="M26 11H15v11"/>`,
+    slight_right:`<path d="M18 42V28l14-16"/><path d="M22 11h11v11"/>`,
+    straight:`<path d="M24 42V8"/><path d="M15 17l9-9 9 9"/>`,
+    arrive:`<path d="M16 42V8"/><path d="M16 9h18l-5 7 5 7H16z" fill="${color}"/>`,
+  }[type];
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+}
+const I = {
+  home:(c,s=24)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${c}"><path d="M12 3l9 8h-3v9h-5v-6h-2v6H6v-9H3z"/></svg>`,
+  work:(c,s=24)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${c}"><path d="M10 4h4a2 2 0 0 1 2 2v1h4a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4V6a2 2 0 0 1 2-2zm0 3h4V6h-4z"/></svg>`,
+  search:(c,s=28)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2.6" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>`,
+  chevDown:(c,s=26)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>`,
+  history:(c,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>`,
+  map:(c,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2.2" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg>`,
+  nav:(c,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${c}"><path d="M12 2l7 19-7-4-7 4z"/></svg>`,
+  recenter:(c,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4" fill="${c}"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>`,
+  bike:(c,s=16)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2"><circle cx="6" cy="16" r="4"/><circle cx="18" cy="16" r="4"/><path d="M6 16l4-8h5l3 8M10 8l3 8"/></svg>`,
+  phoneOff:c=>`<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M3 3l18 18"/></svg>`,
+  check:c=>`<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M7 12.5l3.2 3L17 9"/></svg>`,
+  warn:c=>`<svg width="30" height="30" viewBox="0 0 24 24" fill="${c}"><path d="M12 2L1 21h22zm-1 7h2v6h-2zm0 8h2v2h-2z"/></svg>`,
+};
+
+// ---------- helpers ----------
+function fmt(m) {
+  if (m <= 15) return { big:"Now", unit:"" };
+  if (S.units==="metric") return m<1000 ? {big:String(Math.round(m/10)*10),unit:"m"} : {big:(m/1000).toFixed(1),unit:"km"};
+  const ft=m*3.281; return ft<528 ? {big:String(Math.round(ft/50)*50),unit:"ft"} : {big:(m/1609).toFixed(1),unit:"mi"};
+}
+const distHtml = (px,color="inherit") => { const d=fmt(S.dist); return `<span style="font-size:${px}px;font-weight:700;color:${color}">${d.big}</span>${d.unit?`<span style="font-size:${Math.round(px*.5)}px;font-weight:500;margin-left:3px;color:${color}">${d.unit}</span>`:""}`; };
+const km = (m,i) => S.units==="metric" ? m : i;
+const street = () => S.turn==="arrive" ? "Home" : ({left:"Rue Rachel E",right:"Av. du Parc",slight_left:"Bike path",slight_right:"Rue Saint-Urbain",straight:"Boul. de Maisonneuve"})[S.turn];
+const timeText = (color=C.onSurface) => `<div style="position:absolute;top:8px;width:100%;text-align:center;font-size:12px;font-weight:600;color:${color};z-index:5">12:32</div>`;
+const edgeBtn = (label, bg, fg, icon="", cls="", attrs="") => `<div class="${cls}" ${attrs} style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:128px;height:48px;background:${bg};color:${fg};border-radius:24px 24px 0 0;display:flex;align-items:center;justify-content:center;gap:6px;font-size:14px;font-weight:600;padding-bottom:4px;z-index:6">${icon}${label}</div>`;
+const watch = (inner, extraCls="") => `<div class="relative my-3"><div class="watch ${extraCls}">${inner}</div><div class="crown"></div></div>`;
+
+// ---------- IDLE ----------
+function idleHeader(forTile) {
+  const btn = (ic, label, big) => `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+      <div style="width:${big?64:52}px;height:${big?64:52}px;border-radius:50%;background:${big?C.primary:C.surfaceCHigh};display:flex;align-items:center;justify-content:center">${ic}</div>
+      <div style="font-size:12px;font-weight:600;color:${big?C.primary:C.onSurfaceVar}">${label}</div></div>`;
+  return `
+    <div style="text-align:center;font-size:14px;font-weight:600;color:${C.primary};padding-top:${forTile?34:30}px">Ride to</div>
+    <div style="display:flex;justify-content:center;align-items:flex-end;gap:12px;margin-top:14px">
+      ${btn(I.home(C.primary),"Home",false)}
+      ${btn(I.search(C.onPrimary),"Search",true)}
+      ${btn(I.work(C.primary),"Work",false)}
+    </div>
+    <div class="bounce" style="display:flex;justify-content:center;margin-top:10px">${I.chevDown(C.onSurfaceVar)}</div>`;
+}
+const RECENTS = [
+  ["Café Olimpico","12 min · "+km("3.1 km","1.9 mi")],
+  ["Jean-Talon Market","24 min · "+km("6.4 km","4.0 mi")],
+  ["Mile End Library","9 min · "+km("2.2 km","1.4 mi")],
+  ["Parc La Fontaine","15 min · "+km("3.9 km","2.4 mi")],
+];
+function idleApp() {
+  return `${timeText()}<div class="wc scroll" id="idleScroll">
+    ${idleHeader(false)}
+    <div style="text-align:center;font-size:12px;font-weight:600;color:${C.onSurfaceVar};margin:14px 0 8px">Recent</div>
+    <div style="display:flex;flex-direction:column;gap:6px;padding:0 22px 70px">
+      ${RECENTS.map(([t,s])=>`
+        <div style="background:${C.surfaceCHigh};border-radius:26px;padding:10px 14px;display:flex;align-items:center;gap:10px">
+          ${I.history(C.primary)}
+          <div style="min-width:0"><div style="font-size:14px;font-weight:600;color:${C.onSurface};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t}</div>
+          <div style="font-size:12px;color:${C.onSurfaceVar};margin-top:2px">${s}</div></div>
+        </div>`).join("")}
+    </div></div>`;
+}
+
+// ---------- NAV: tile + ride screen ----------
+function navTile() {
+  return `
+    <div style="position:absolute;top:0;left:0;right:0;height:140px;background:${C.tertiaryContainer};display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px">${arrow(S.turn,56,C.onTertiaryContainer)}<div style="color:${C.onTertiaryContainer}">${distHtml(36)}</div></div>
+      <div style="font-size:15px;margin-top:4px;font-weight:600;color:${C.onTertiaryContainer};max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${street()}</div>
+    </div>
+    <div style="position:absolute;top:154px;width:100%;text-align:center">
+      <div style="font-size:20px;font-weight:700;color:${C.tertiary}">8 min</div>
+      <div style="font-size:13px;color:${C.onSurfaceVar};margin-top:4px">${km("2.1 km","1.3 mi")} · 12:41</div>
+    </div>`;
+}
+function rideTurn() {
+  if (S.aod) return `
+    ${timeText(C.outline)}
+    <div style="position:absolute;inset:0;transform:translate(2px,-1px);display:flex;flex-direction:column;align-items:center;padding-top:44px">
+      ${arrow(S.turn,72,"#fff",3)}
+      <div style="color:#fff;margin-top:4px">${distHtml(38)}</div>
+      <div style="font-size:14px;color:${C.onSurfaceVar};margin-top:6px">${street()}</div>
+      <div style="font-size:13px;color:${C.outline};margin-top:12px">8 min · 12:41</div>
+    </div>`;
+  return `
+    ${timeText(C.onTertiaryContainer)}
+    <div style="position:absolute;top:0;left:0;right:0;height:140px;background:${C.tertiaryContainer};display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px">${arrow(S.turn,58,C.onTertiaryContainer)}<div style="color:${C.onTertiaryContainer}">${distHtml(38)}</div></div>
+      <div style="font-size:15px;margin-top:4px;font-weight:600;color:${C.onTertiaryContainer}">${street()}</div>
+    </div>
+    <div style="position:absolute;top:150px;width:100%;text-align:center">
+      <div style="font-size:19px;font-weight:700;color:${C.tertiary}">8 min</div>
+      <div style="font-size:12px;color:${C.onSurfaceVar};margin-top:3px">${km("2.1 km","1.3 mi")} · 12:41</div>
+    </div>
+    ${edgeBtn("Map", C.surfaceCHigh, C.primary, I.map(C.primary,18), "tap", 'data-action="toMap"')}`;
+}
+function mapWorld() {
+  const a = S.aod;
+  const bg = a ? "#000" : "#1B1D21", road = a ? "#2b2b2b" : "#3C4043", label = a ? "#555" : "#9AA0A6";
+  const dir = ["left","slight_left"].includes(S.turn) ? -1 : ["right","slight_right"].includes(S.turn) ? 1 : 0;
+  const tx = 300 + dir*160;
+  const ahead = dir===0 ? "300,330 300,90" : `300,330 300,240 ${tx},240 ${tx},90`;
+  const dest = dir===0 ? [300,90] : [tx,90];
+  const routeCol = a ? "#fff" : "#8AB4F8";
+  const H = [90,170,240,330,420,520], V = [140,220,300,380,460,540];
+  return `
+    <rect x="0" y="0" width="600" height="600" fill="${bg}"/>
+    ${a?"":`<rect x="150" y="100" width="60" height="60" rx="6" fill="#1F3A2A"/><path d="M380 600 Q420 520 600 470 L600 600Z" fill="#17304A"/>`}
+    ${H.map(y=>`<line x1="0" y1="${y}" x2="600" y2="${y}" stroke="${road}" stroke-width="${y===240?10:6}"/>`).join("")}
+    ${V.map(x=>`<line x1="${x}" y1="0" x2="${x}" y2="600" stroke="${road}" stroke-width="${x===300?10:6}"/>`).join("")}
+    <text x="312" y="234" fill="${label}" font-size="12">Av. du Parc</text>
+    <text x="230" y="410" fill="${label}" font-size="12" transform="rotate(-90 230 410)">Rue Saint-Urbain</text>
+    <polyline points="300,560 300,330" fill="none" stroke="${a?"#444":"#5F6368"}" stroke-width="9" stroke-linecap="round"/>
+    ${a?"":`<polyline points="${ahead}" fill="none" stroke="#1A3D73" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>`}
+    <polyline points="${ahead}" fill="none" stroke="${routeCol}" stroke-width="${a?4:8}" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dir!==0?`<circle cx="300" cy="240" r="7" fill="${a?"#000":C.tertiaryContainer}" stroke="${a?"#fff":C.onTertiaryContainer}" stroke-width="2"/>`:""}
+    <g transform="translate(${dest[0]-8},${dest[1]-26})"><path d="M8 0a8 8 0 0 1 8 8c0 6-8 16-8 16S0 14 0 8a8 8 0 0 1 8-8z" fill="${a?"#fff":"#EA4335"}"/></g>
+    <g transform="translate(300,330)">
+      ${a?"":`<circle r="22" fill="#4285F4" opacity=".18"/>`}
+      <circle r="11" fill="${a?"#000":"#fff"}" stroke="${a?"#fff":"none"}" stroke-width="2"/>
+      <path d="M0 -8 L6 6 L0 3 L-6 6Z" fill="${a?"#fff":"#4285F4"}"/>
+    </g>`;
+}
+function mapTransform() { return `translate(${120+S.pan.x},${120+S.pan.y}) scale(${S.zoom}) translate(-300,-300)`; }
+function rideMap() {
+  const a = S.aod, panned = S.pan.x!==0 || S.pan.y!==0 || S.zoom!==1;
+  const banner = a
+    ? `<div style="position:absolute;top:26px;left:50%;transform:translateX(-50%);border:1.5px solid ${C.outline};background:#000;border-radius:999px;padding:6px 14px;display:flex;align-items:center;gap:6px;z-index:5">${arrow(S.turn,24,"#fff",4)}<span style="color:#fff">${distHtml(18)}</span></div>`
+    : `<div style="position:absolute;top:26px;left:50%;transform:translateX(-50%);background:${C.tertiaryContainer};border-radius:999px;padding:6px 14px 6px 10px;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(0,0,0,.5);z-index:5;white-space:nowrap">${arrow(S.turn,26,C.onTertiaryContainer)}<span style="color:${C.onTertiaryContainer}">${distHtml(18)}</span><span style="font-size:12px;color:${C.onTertiaryContainer};max-width:70px;overflow:hidden;text-overflow:ellipsis">${street()}</span></div>`;
+  return `
+    <svg class="mapsvg" id="mapsvg" width="240" height="240" style="position:absolute;inset:0;${a?"pointer-events:none":""}"><g id="mapg" transform="${mapTransform()}">${mapWorld()}</g></svg>
+    ${timeText(a?C.outline:C.onSurface)}
+    ${banner}
+    ${a?"":`
+      <div id="recenter" class="tap" data-action="recenter" style="position:absolute;right:20px;top:150px;width:40px;height:40px;border-radius:50%;background:${C.surfaceCHigh};display:${panned?"flex":"none"};align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.5);z-index:6">${I.recenter(C.primary)}</div>
+      ${edgeBtn("Turns", C.surfaceCHigh, C.primary, I.nav(C.primary,16), "tap", 'data-action="toTurn"')}`}
+    ${a?`<div style="position:absolute;bottom:20px;width:100%;text-align:center;font-size:12px;color:${C.outline}">8 min · 12:41</div>`:""}`;
+}
+
+// ---------- STATES ----------
+const STATES = {
+  idle: {
+    label:"Idle / Start ride",
+    intro:"Home · Search · Work in an M3 button group, with the main action (Search) larger and filled. The chevron tells you to scroll for Recent trips. Scroll the right-hand watch to try it.",
+    cards:[
+      { name:"Tile", render:()=>`<div class="wc">${idleHeader(true)}</div>`,
+        notes:["Tiles can't scroll, so tapping the chevron (or anywhere below the buttons) opens the app start screen, scrolled to Recents.",
+               "Home / Work start a ride straight away using the cached route (0 API calls on a cache hit).",
+               "Search opens Wear voice / keyboard input. The query goes to the phone for geocoding, and results come back as a list.",
+               "M3 tile: <code>primaryLayout</code>: title 'Ride to' + <code>buttonGroup</code> (icon buttons; Search uses the filled primary style)."] },
+      { name:"App start screen (scroll ↓)", render:idleApp,
+        notes:["The same header as the tile, so going from tile to app feels seamless.",
+               "Recent trips are full-width M3 tonal <code>Button</code>s (icon + label + secondary label) in a <code>TransformingLazyColumn</code> (M3 replacement for <code>ScalingLazyColumn</code>).",
+               "Rotate the crown to scroll. Tap a recent trip to start a ride."] },
+    ]
+  },
+  nav: {
+    label:"Navigating",
+    intro:"The tile keeps the Maps-classic card you liked. Tap it to open the Ride screen. On the Ride screen, the edge button switches between Turn view and Map view. In Map view, drag to pan, scroll the mouse wheel (the crown on the watch) to zoom, and tap recenter to snap back. Toggle Always-On Display above to see ambient mode.",
+    cards:[
+      { name:"Tile", render:()=>`<div class="wc" style="${S.aod?"opacity:.15":""}">${navTile()}</div>${S.aod?`<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:40px;font-size:13px;color:${C.onSurfaceVar}">Tiles aren't shown on the Always-On Display; the Ride screen takes over.</div>`:""}`,
+        notes:["A glance from the tile carousel. Tap it to open the Ride screen.",
+               "The ETA uses a ProtoLayout <b>dynamic time</b> expression, so it counts down with no tile refresh. The distance may be a few seconds behind.",
+               "M3: tertiary container color in the title area; <code>text</code> + <code>icon</code>."] },
+      { name:()=>"Ride screen: " + (S.rideView==="turn"?"Turn view":"Map view") + (S.aod?" (ambient)":""), id:"ride",
+        render:()=>`<div class="wc">${S.rideView==="turn"?rideTurn():rideMap()}</div>`,
+        notes:["<b>Edge button</b> switches <i>Map ↔ Turns</i>. The choice is remembered for the next ride.",
+               "<b>Map view:</b> Maps SDK <code>MapView</code>. The camera follows your position and direction. Dragging pauses follow mode and shows <b>recenter</b>; it auto-recenters after 10 s idle. The crown zooms.",
+               "The next turn stays visible as a compact pill at the top of the map.",
+               "<b>Ambient:</b> no filled blocks or buttons; outlined arrow, greyscale map (<code>MapView.onEnterAmbient</code>), and a slight shift against burn-in. An Ongoing Activity keeps it in front instead of the watch face."] },
+    ]
+  },
+  offroute: {
+    label:"Off route",
+    intro:"More generous rerouting: it triggers automatically after 15 s off route, at most once every 20 s, up to 10 per trip. The budget isn't shown to the rider any more. The compass is only a fallback for when the monthly API cap is reached or you're offline.",
+    cards:[
+      { name:"Rerouting", render:()=>`
+          ${timeText(C.amberOn)}
+          <div style="position:absolute;top:0;left:0;right:0;height:140px;background:#7A4100;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding-bottom:12px">
+            ${I.warn(C.amberOn)}
+            <div style="font-size:22px;font-weight:700;margin-top:4px;color:${C.amberOn}">Off route</div>
+            <div style="font-size:14px;margin-top:3px;color:${C.amberOn}">Finding a new route…</div>
+          </div>
+          <div style="position:absolute;top:160px;width:100%;text-align:center;font-size:13px;color:${C.onSurfaceVar}">${km("1.4 km","0.9 mi")} to Home</div>`,
+        notes:["Usually shows for about 1–2 s before the new route replaces it.","Paired with a 3-pulse 'off route' vibration, then a single tick when the new route is ready.","Map view: the old route fades and the new route draws in."] },
+      { name:"Fallback: compass to destination", render:()=>`
+          <svg width="240" height="240" style="position:absolute;inset:0"><circle cx="120" cy="120" r="108" stroke="${C.amber}" stroke-width="4" fill="none" stroke-dasharray="4 10"/></svg>
+          ${timeText(C.amberOn)}
+          <div style="position:absolute;top:44px;width:100%;display:flex;justify-content:center;transform:rotate(35deg)">${arrow("straight",90,"#FDD663")}</div>
+          <div style="position:absolute;top:146px;width:100%;text-align:center">
+            <div style="font-size:22px;font-weight:700">${km("1.4 km","0.9 mi")}</div>
+            <div style="font-size:12px;color:${C.onSurfaceVar};margin-top:4px;padding:0 40px">to Home · offline / monthly limit reached</div>
+          </div>`,
+        notes:["Uses no API calls: GPS plus the compass direction to the destination.","Only shown when rerouting is impossible."] },
+    ]
+  },
+  arrived: {
+    label:"Arrived ✓", intro:"Approved as is. Colors updated to M3 roles.",
+    cards:[{ name:"Ride summary", render:()=>`
+      ${timeText()}
+      <div style="position:absolute;top:30px;width:100%;display:flex;justify-content:center">${I.check(C.tertiary)}</div>
+      <div style="position:absolute;top:96px;width:100%;text-align:center">
+        <div style="font-size:22px;font-weight:700">Arrived</div>
+        <div style="font-size:14px;color:${C.onSurfaceVar};margin-top:4px">Home</div>
+        <div style="font-size:14px;color:${C.tertiary};margin-top:8px;font-weight:600">21 min · ${km("5.3 km","3.3 mi")}</div>
+      </div>
+      ${edgeBtn("Done", C.primary, C.onPrimary)}`, notes:["Returns to the Idle tile after the rider taps Done, or after 2 min."] }]
+  },
+  disconnected: {
+    label:"Phone disconnected ✓", intro:"Approved as is. Colors updated to M3 roles.",
+    cards:[{ name:"Reconnect prompt", render:()=>`
+      ${timeText()}
+      <div style="position:absolute;top:40px;width:100%;display:flex;justify-content:center">${I.phoneOff(C.outline)}</div>
+      <div style="position:absolute;top:96px;width:100%;text-align:center;padding:0 30px">
+        <div style="font-size:17px;font-weight:700">Phone not connected</div>
+        <div style="font-size:13px;color:${C.onSurfaceVar};margin-top:6px">Last: ${street()}</div>
+      </div>
+      ${edgeBtn("Open on phone", C.surfaceCHigh, C.primary)}`, notes:["Grey means no live data; it never shows stale data as if it were live.","A single long vibration when the connection drops mid-ride."] }]
+  },
+};
+
+// ---------- render ----------
+function render() {
+  const d=fmt(S.dist); document.getElementById("distLabel").textContent = d.big+(d.unit?" "+d.unit:"");
+  document.getElementById("tabs").innerHTML = Object.entries(STATES).map(([k,v]) =>
+    `<button data-k="${k}" class="px-3 py-1.5 rounded-full text-sm border border-[var(--border)] ${S.state===k?"bg-[var(--primary)] text-[var(--primary-foreground)]":"bg-[var(--card)]"}">${v.label}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { S.state=b.dataset.k; render(); });
+  const st = STATES[S.state];
+  document.getElementById("stateIntro").textContent = st.intro;
+  const grid = document.getElementById("grid");
+  const scrollTop = document.getElementById("idleScroll")?.scrollTop || 0;
+  grid.innerHTML = st.cards.map(c => `
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 flex flex-col items-center">
+      ${watch(c.render())}
+      <div class="w-full mt-4">
+        <div class="font-semibold">${typeof c.name==="function"?c.name():c.name}</div>
+        <ul class="list-disc pl-5 mt-2 text-sm text-[var(--muted-foreground)] space-y-1">${c.notes.map(n=>`<li>${n}</li>`).join("")}</ul>
+      </div>
+    </div>`).join("");
+  const sc = document.getElementById("idleScroll"); if (sc) sc.scrollTop = scrollTop;
+  grid.querySelectorAll("[data-action]").forEach(el => el.onclick = () => {
+    const a = el.dataset.action;
+    if (a==="toMap") S.rideView="map";
+    if (a==="toTurn") S.rideView="turn";
+    if (a==="recenter") { S.pan={x:0,y:0}; S.zoom=1; }
+    render();
+  });
+  bindMap();
+}
+function bindMap() {
+  const svg = document.getElementById("mapsvg"); if (!svg || S.aod) return;
+  const g = document.getElementById("mapg"), rc = document.getElementById("recenter");
+  let start=null;
+  const upd = () => { g.setAttribute("transform", mapTransform()); if (rc) rc.style.display = (S.pan.x||S.pan.y||S.zoom!==1) ? "flex" : "none"; };
+  svg.addEventListener("pointerdown", e => { start={x:e.clientX-S.pan.x, y:e.clientY-S.pan.y}; svg.setPointerCapture(e.pointerId); });
+  svg.addEventListener("pointermove", e => { if(!start) return;
+    S.pan.x = Math.max(-260, Math.min(260, e.clientX-start.x));
+    S.pan.y = Math.max(-260, Math.min(260, e.clientY-start.y)); upd(); });
+  svg.addEventListener("pointerup", () => start=null);
+  svg.addEventListener("wheel", e => { e.preventDefault(); S.zoom = Math.max(.6, Math.min(2.2, S.zoom * (e.deltaY<0?1.1:.9))); upd(); }, {passive:false});
+}
+document.getElementById("turn").onchange = e => { S.turn=e.target.value; render(); };
+document.getElementById("dist").oninput = e => { S.dist=+e.target.value; render(); };
+document.getElementById("units").onchange = e => { S.units=e.target.value; render(); };
+document.getElementById("aod").onchange = e => { S.aod=e.target.checked; render(); };
+render();
+</script>
+</body>
+</html>

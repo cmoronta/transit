@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  .phone {
+    width: 356px; height: 740px; border-radius: 48px;
+    position: relative; overflow: hidden;
+    box-shadow: 0 0 0 10px #1C1D21, 0 0 0 12px #363940, 0 24px 60px rgba(0,0,0,.55);
+    font-family: "Google Sans Flex", "Google Sans", Roboto, system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    transition: background-color .25s, color .25s;
+  }
+  .punch {
+    position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
+    width: 12px; height: 12px; border-radius: 999px; background: #000; z-index: 60;
+  }
+  .no-scrollbar { overflow-y: auto; scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .tap { cursor: pointer; user-select: none; transition: transform .12s ease, opacity .12s ease; }
+  .tap:active { transform: scale(0.97); }
+  .badge { font-size: 12px; padding: 2px 10px; border-radius: 9999px; border: 1px solid var(--border); color: var(--muted-foreground); }
+  .float-shadow { box-shadow: 0 6px 20px rgba(0,0,0,.28), 0 1px 4px rgba(0,0,0,.18); }
+  .pin-bounce { animation: pinFloat 2.6s ease-in-out infinite; }
+  @keyframes pinFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+</style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-6">
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center gap-3 flex-wrap">
+    <h1 class="text-2xl font-semibold">Phone App Workshop · Multi-Route Selection &amp; Full-Screen Sheet</h1>
+    <span class="badge">Revision 5 · Safest Bike Route Default + 3-Stop Full-Screen Drawer</span>
+  </div>
+  <p class="text-sm text-[var(--muted-foreground)] mt-1">
+    When you pick a destination, the app plots all <b>alternative routes returned by the Transit API</b> on the map and automatically selects the <b>highest % protected bike path</b> by default. Pull/click the drawer handle to expand it all the way to <b>Full Screen</b>.
+  </p>
+
+  <!-- Flow state switcher + Drawer height switcher -->
+  <div class="flex flex-wrap items-center justify-between gap-3 mt-5">
+    <div id="statePills" class="flex flex-wrap gap-2"></div>
+    <div class="flex items-center gap-2">
+      <div id="sheetStopPills" class="flex items-center gap-1 bg-[var(--card)] border border-[var(--border)] rounded-full p-1 text-xs"></div>
+      <button id="adminToggleBtn" class="px-3 py-1.5 rounded-full text-xs font-semibold border border-[var(--border)] bg-[var(--card)]">
+        🛠️ Admin
+      </button>
+    </div>
+  </div>
+
+  <!-- Top simulation bar -->
+  <div class="mt-3 bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 flex flex-wrap gap-5 items-center text-sm">
+    <label class="flex items-center gap-2">Material You Seed
+      <select id="seed" class="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1">
+        <option value="emerald" selected>BeltLine Emerald</option>
+        <option value="coral">Peachtree Coral</option>
+        <option value="indigo">Midtown Indigo</option>
+      </select>
+    </label>
+    <label class="flex items-center gap-2">Theme
+      <select id="mode" class="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1">
+        <option value="dark" selected>Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </label>
+    <label class="flex items-center gap-2">Watch
+      <select id="watchStatus" class="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1">
+        <option value="connected" selected>Pixel Watch 3 · 88%</option>
+        <option value="disconnected">Disconnected (Watch GPS)</option>
+      </select>
+    </label>
+    <label class="flex items-center gap-2">Units
+      <select id="units" class="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-1">
+        <option value="imperial" selected>Imperial (mi / ft)</option>
+        <option value="metric">Metric (km / m)</option>
+      </select>
+    </label>
+  </div>
+
+  <!-- Main layout -->
+  <div class="grid lg:grid-cols-12 gap-8 mt-6 items-start">
+    <div class="lg:col-span-5 flex justify-center">
+      <div id="phoneFrame" class="phone">
+        <div class="punch"></div>
+        <!-- Edge-to-edge transparent status bar -->
+        <div id="statusBar" class="px-7 pt-3 pb-1 flex justify-between items-center text-xs font-semibold z-50 select-none">
+          <span>4:46</span>
+          <div class="flex items-center gap-2">
+            <span>5G</span>
+            <span>100%</span>
+          </div>
+        </div>
+
+        <!-- Unified Map + Morphing Overlays + 3-Stop Bottom Sheet -->
+        <div id="screenBody" class="flex-1 relative overflow-hidden flex flex-col"></div>
+
+        <!-- Edge-to-edge gesture pill -->
+        <div id="gestureBar" class="pb-2 pt-1 flex justify-center z-50">
+          <div class="w-28 h-1 rounded-full opacity-45 bg-current"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="lg:col-span-7 space-y-4">
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+        <h2 id="screenTitle" class="text-lg font-semibold"></h2>
+        <p id="screenDesc" class="text-sm text-[var(--muted-foreground)] mt-1"></p>
+        <ul id="screenNotes" class="list-disc pl-5 mt-3 text-sm text-[var(--muted-foreground)] space-y-1.5"></ul>
+      </div>
+
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 text-sm">
+        <h3 class="font-semibold mb-2">What Changed in Revision 5</h3>
+        <ul class="list-disc pl-5 space-y-1.5 text-[var(--muted-foreground)]">
+          <li><b class="text-[var(--foreground)]">Fixed the Top Header in Route Preview:</b> Removed those confusing 3 destination pills at the top! Instead, the top of <i>Route Preview</i> is a clean Google Maps <b>Origin → Destination card</b> (<code>📍 Your location → 🏁 Ponce City Market</code> with a <code>←</code> back button).</li>
+          <li><b class="text-[var(--foreground)]">Multiple API Routes per Destination (Safest Selected by Default):</b> When you pick a destination, the Transit API returns up to 3 alternative bike itineraries. We compute each itinerary's <b>% protected bike path</b> (from OTP's cycleway/greenway street classes), sort the highest-protected route first as the <b>Default ★</b>, and draw all 3 polylines on the map so you can tap any route on the map or in the drawer to compare.</li>
+          <li><b class="text-[var(--foreground)]">Full-Screen Pull-Up Drawer (<code>Peek</code> · <code>Half</code> · <code>Full</code>):</b> Drag/tap the drawer handle (or use the <i>Drawer: Peek / Half / Full</i> buttons above) to pull the bottom sheet all the way up to cover the whole screen.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const THEMES = {
+  emerald: {
+    dark: {
+      bg: "#0E1512", surface: "#111A16", surfaceLow: "#16211C", surfaceHigh: "#1F2D27", surfaceHighest: "#293A32",
+      onSurface: "#E0E7E3", onSurfaceVar: "#9EB0A7", outline: "#405249",
+      primary: "#6DD58C", onPrimary: "#003919", primaryCont: "#146C2E", onPrimaryCont: "#C4EED0",
+      secondaryCont: "#233F31", onSecondaryCont: "#CBEAD7",
+      tertiary: "#80D4E8", tertiaryCont: "#0D4A5A", onTertiaryCont: "#B9EEFF",
+      mapBg: "#101815", mapPark: "#152D21", mapWater: "#132938", mapRoad: "#23322B", mapMajor: "#2E4239", mapBike: "#3B8F59"
+    },
+    light: {
+      bg: "#F5FBF6", surface: "#F5FBF6", surfaceLow: "#EFF5F0", surfaceHigh: "#E3ECE6", surfaceHighest: "#DCE6DF",
+      onSurface: "#171D19", onSurfaceVar: "#404943", outline: "#C0C9C1",
+      primary: "#146C2E", onPrimary: "#FFFFFF", primaryCont: "#1E8E3E", onPrimaryCont: "#FFFFFF",
+      secondaryCont: "#D3E8D9", onSecondaryCont: "#0F261A",
+      tertiary: "#00677D", tertiaryCont: "#B5EBFF", onTertiaryCont: "#001F27",
+      mapBg: "#E8EFEA", mapPark: "#C8E6D0", mapWater: "#B6DCF0", mapRoad: "#FFFFFF", mapMajor: "#F7D99C", mapBike: "#1E8E3E"
+    }
+  },
+  coral: {
+    dark: {
+      bg: "#181210", surface: "#1D1614", surfaceLow: "#261D1A", surfaceHigh: "#322623", surfaceHighest: "#3E302C",
+      onSurface: "#F0DFDA", onSurfaceVar: "#BBA39C", outline: "#594640",
+      primary: "#FFB59D", onPrimary: "#5C1900", primaryCont: "#7D2B0D", onPrimaryCont: "#FFDBD0",
+      secondaryCont: "#4A332C", onSecondaryCont: "#FFDBD0",
+      tertiary: "#7AD8B5", tertiaryCont: "#0E513B", onTertiaryCont: "#97F5D0",
+      mapBg: "#171312", mapPark: "#1D2E23", mapWater: "#162836", mapRoad: "#2D2523", mapMajor: "#3D312E", mapBike: "#FF8A65"
+    },
+    light: {
+      bg: "#FFF8F6", surface: "#FFF8F6", surfaceLow: "#FCEEE9", surfaceHigh: "#F3E2DC", surfaceHighest: "#ECDAD3",
+      onSurface: "#231917", onSurfaceVar: "#53433F", outline: "#D8C2BC",
+      primary: "#9A3E1E", onPrimary: "#FFFFFF", primaryCont: "#B84A24", onPrimaryCont: "#FFFFFF",
+      secondaryCont: "#FFDBD0", onSecondaryCont: "#2C160F",
+      tertiary: "#176B52", tertiaryCont: "#A4F2D3", onTertiaryCont: "#002116",
+      mapBg: "#F3ECE9", mapPark: "#CDE5D4", mapWater: "#B8DEF2", mapRoad: "#FFFFFF", mapMajor: "#FFE0B2", mapBike: "#E65100"
+    }
+  },
+  indigo: {
+    dark: {
+      bg: "#11131A", surface: "#151821", surfaceLow: "#1B1F2B", surfaceHigh: "#252A3A", surfaceHighest: "#30364A",
+      onSurface: "#E2E4F0", onSurfaceVar: "#9FA5BC", outline: "#43495E",
+      primary: "#ADC6FF", onPrimary: "#002E69", primaryCont: "#1E448F", onPrimaryCont: "#D8E2FF",
+      secondaryCont: "#2B3856", onSecondaryCont: "#D8E2FF",
+      tertiary: "#7ADC9B", tertiaryCont: "#0F522B", onTertiaryCont: "#96F8B5",
+      mapBg: "#12151E", mapPark: "#182C25", mapWater: "#13263A", mapRoad: "#232838", mapMajor: "#2E354B", mapBike: "#6DD58C"
+    },
+    light: {
+      bg: "#F8F9FF", surface: "#F8F9FF", surfaceLow: "#F0F3FC", surfaceHigh: "#E4E8F5", surfaceHighest: "#DCE1F0",
+      onSurface: "#191B23", onSurfaceVar: "#444754", outline: "#C4C6D4",
+      primary: "#2954A3", onPrimary: "#FFFFFF", primaryCont: "#2954A3", onPrimaryCont: "#FFFFFF",
+      secondaryCont: "#DAE2F9", onSecondaryCont: "#131C2B",
+      tertiary: "#166C3A", tertiaryCont: "#A2F4B9", onTertiaryCont: "#00210D",
+      mapBg: "#EBEEF7", mapPark: "#C9E6D4", mapWater: "#B8DCF2", mapRoad: "#FFFFFF", mapMajor: "#FFE0A3", mapBike: "#1E8E3E"
+    }
+  }
+};
+
+// Each Destination has 3 alternative routes returned by the Transit API,
+// ordered with Highest % Protected Path first (index 0 = default).
+const DESTINATIONS = [
+  {
+    id: 0,
+    name: "Ponce City Market",
+    sub: "Old Fourth Ward · North Ave NE",
+    destX: 258, destY: 210,
+    alternatives: [
+      {
+        id: 0,
+        badge: "Safest · Default ★",
+        via: "via 10th St Cycletrack & BeltLine",
+        protectedPct: 92,
+        time: "14 min",
+        eta: "5:00 PM",
+        dist: (u) => u("2.8 mi", "4.5 km"),
+        elev: (u) => u("Mostly flat (+82 ft)", "Mostly flat (+25 m)"),
+        path: "M 110 152 L 215 152 Q 246 156 258 210",
+        labelX: 205, labelY: 122,
+        steps: [
+          { dir: "right", street: "10th St NE Cycletrack", dist: (u) => u("0.6 mi", "950 m"), tag: "Protected cycletrack" },
+          { dir: "right", street: "Monroe Dr NE Crossing", dist: (u) => u("350 ft", "110 m"), tag: "Signalized bike crossing" },
+          { dir: "left", street: "Atlanta BeltLine Eastside Trail", dist: (u) => u("1.9 mi", "3.1 km"), tag: "Car-free greenway" },
+          { dir: "right", street: "Ponce City Market Shed Ramp", dist: (u) => u("250 ft", "75 m"), tag: "Direct trail ramp" },
+          { dir: "arrive", street: "Ponce City Market Bike Valet", dist: () => "Arrive", tag: "Destination" }
+        ]
+      },
+      {
+        id: 1,
+        badge: "Quietest",
+        via: "via Argonne Ave & Charles Allen Dr",
+        protectedPct: 76,
+        time: "16 min",
+        eta: "5:02 PM",
+        dist: (u) => u("2.6 mi", "4.2 km"),
+        elev: (u) => u("Gentle hills (+105 ft)", "Gentle hills (+32 m)"),
+        path: "M 110 152 L 165 152 L 165 210 L 258 210",
+        labelX: 145, labelY: 194,
+        steps: [
+          { dir: "right", street: "8th St NE Quiet Street", dist: (u) => u("0.4 mi", "640 m"), tag: "Neighborhood greenway" },
+          { dir: "right", street: "Charles Allen Dr NE", dist: (u) => u("1.4 mi", "2.2 km"), tag: "Buffered bike lane" },
+          { dir: "left", street: "Eastside BeltLine Connector", dist: (u) => u("0.8 mi", "1.3 km"), tag: "Multi-use path" },
+          { dir: "arrive", street: "Ponce City Market Bike Valet", dist: () => "Arrive", tag: "Destination" }
+        ]
+      },
+      {
+        id: 2,
+        badge: "Fastest",
+        via: "via North Ave & Ponce de Leon Ave",
+        protectedPct: 48,
+        time: "11 min",
+        eta: "4:57 PM",
+        dist: (u) => u("2.1 mi", "3.4 km"),
+        elev: (u) => u("Direct (+68 ft)", "Direct (+21 m)"),
+        path: "M 110 152 L 110 240 L 258 210",
+        labelX: 112, labelY: 256,
+        steps: [
+          { dir: "right", street: "Peachtree St NE", dist: (u) => u("0.7 mi", "1.1 km"), tag: "Shared arterial" },
+          { dir: "left", street: "Ponce de Leon Ave NE", dist: (u) => u("1.4 mi", "2.3 km"), tag: "Painted bike lane" },
+          { dir: "arrive", street: "Ponce City Market Main Entrance", dist: () => "Arrive", tag: "Destination" }
+        ]
+      }
+    ]
+  },
+  {
+    id: 1,
+    name: "Work · Tech Square",
+    sub: "Midtown · Spring St NW",
+    destX: 58, destY: 198,
+    alternatives: [
+      {
+        id: 0,
+        badge: "Safest · Default ★",
+        via: "via 5th St Protected Bike Corridor",
+        protectedPct: 90,
+        time: "9 min",
+        eta: "4:55 PM",
+        dist: (u) => u("1.6 mi", "2.6 km"),
+        elev: (u) => u("Flat (+42 ft)", "Flat (+13 m)"),
+        path: "M 110 152 L 110 198 L 58 198",
+        labelX: 74, labelY: 175,
+        steps: [
+          { dir: "left", street: "Myrtle St NE", dist: (u) => u("0.3 mi", "480 m"), tag: "Quiet street" },
+          { dir: "right", street: "5th St NE Protected Cycletrack", dist: (u) => u("1.3 mi", "2.1 km"), tag: "Protected cycletrack" },
+          { dir: "arrive", street: "Tech Square Courtyard", dist: () => "Arrive", tag: "Destination" }
+        ]
+      },
+      {
+        id: 1,
+        badge: "Fastest",
+        via: "via 10th St NW & Williams St",
+        protectedPct: 62,
+        time: "7 min",
+        eta: "4:53 PM",
+        dist: (u) => u("1.4 mi", "2.2 km"),
+        elev: (u) => u("Moderate (+64 ft)", "Moderate (+19 m)"),
+        path: "M 110 152 L 58 152 L 58 198",
+        labelX: 42, labelY: 132,
+        steps: [
+          { dir: "left", street: "10th St NW", dist: (u) => u("0.9 mi", "1.4 km"), tag: "Bike lane" },
+          { dir: "left", street: "Spring St NW", dist: (u) => u("0.5 mi", "800 m"), tag: "Buffered lane" },
+          { dir: "arrive", street: "Tech Square Courtyard", dist: () => "Arrive", tag: "Destination" }
+        ]
+      }
+    ]
+  },
+  {
+    id: 2,
+    name: "Krog Street Market",
+    sub: "Inman Park · Edgewood Ave",
+    destX: 274, destY: 268,
+    alternatives: [
+      {
+        id: 0,
+        badge: "Safest · Default ★",
+        via: "via Eastside BeltLine Greenway",
+        protectedPct: 95,
+        time: "21 min",
+        eta: "5:07 PM",
+        dist: (u) => u("3.9 mi", "6.3 km"),
+        elev: (u) => u("Rolling (+130 ft)", "Rolling (+40 m)"),
+        path: "M 110 152 L 215 152 Q 252 162 274 268",
+        labelX: 212, labelY: 125,
+        steps: [
+          { dir: "right", street: "10th St NE Cycletrack", dist: (u) => u("0.6 mi", "950 m"), tag: "Protected cycletrack" },
+          { dir: "right", street: "Eastside BeltLine Trail South", dist: (u) => u("3.3 mi", "5.3 km"), tag: "Car-free greenway" },
+          { dir: "arrive", street: "Krog Street Market Plaza", dist: () => "Arrive", tag: "Destination" }
+        ]
+      },
+      {
+        id: 1,
+        badge: "Fastest",
+        via: "via Boulevard NE Bike Lane",
+        protectedPct: 58,
+        time: "17 min",
+        eta: "5:03 PM",
+        dist: (u) => u("3.3 mi", "5.3 km"),
+        elev: (u) => u("Hilly (+165 ft)", "Hilly (+50 m)"),
+        path: "M 110 152 L 165 215 L 274 268",
+        labelX: 145, labelY: 242,
+        steps: [
+          { dir: "right", street: "Monroe Dr to Boulevard NE", dist: (u) => u("2.4 mi", "3.9 km"), tag: "Painted bike lane" },
+          { dir: "left", street: "Edgewood Ave SE Protected Lane", dist: (u) => u("0.9 mi", "1.4 km"), tag: "Protected lane" },
+          { dir: "arrive", street: "Krog Street Market Plaza", dist: () => "Arrive", tag: "Destination" }
+        ]
+      }
+    ]
+  }
+];
+
+const S = {
+  flow: "preview", // start on "preview" so user immediately sees the multi-route selection & top header fix!
+  adminOpen: false,
+  seed: "emerald",
+  mode: "dark",
+  watch: "connected",
+  units: "imperial",
+  destIdx: 0,      // Which destination (Ponce, Tech Sq, Krog)
+  altIdx: 0,       // Which API route alternative for that destination (0 = highest % protected default!)
+  sheetStop: "half", // "peek" | "half" | "full"
+  bikeLayer: true,
+  toast: ""
+};
+
+const T = () => THEMES[S.seed][S.mode];
+const u = (imp, met) => S.units === "imperial" ? imp : met;
+const curDest = () => DESTINATIONS[S.destIdx];
+const curAlt = () => curDest().alternatives[S.altIdx] || curDest().alternatives[0];
+
+function iconArrow(dir, color, size=20) {
+  const paths = {
+    left: `<path d="M19 21V11a2 2 0 0 0-2-2H6"/><path d="M10 5L5 9l5 4"/>`,
+    right: `<path d="M5 21V11a2 2 0 0 1 2-2h11"/><path d="M14 5l5 4-5 4"/>`,
+    arrive: `<circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.4 8 12 8 12s8-6.6 8-12a8 8 0 0 0-8-8z"/>`
+  };
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${paths[dir]||paths.right}</svg>`;
+}
+
+// ---------- Persistent Atlanta Map Canvas ----------
+function renderPersistentMap() {
+  const c = T();
+  const dest = curDest();
+  const activeAlt = curAlt();
+  const showRoutes = S.flow === "preview" || S.flow === "riding";
+  const mapTransform = S.flow === "riding" ? "translate(-35, 25) scale(1.22)" : "translate(0, 0) scale(1)";
+
+  return `
+    <div class="absolute inset-0 select-none overflow-hidden" style="background:${c.mapBg}">
+      <svg width="100%" height="100%" viewBox="0 0 356 640" preserveAspectRatio="xMidYMid slice">
+        <g transform="${mapTransform}" style="transition: transform .35s ease">
+          <!-- Piedmont Park & Freedom Park -->
+          <path d="M 145 55 L 242 55 L 248 150 L 145 150 Z" fill="${c.mapPark}"/>
+          <path d="M 215 215 Q 280 210 356 235 L 356 265 Q 275 235 215 240 Z" fill="${c.mapPark}"/>
+          <ellipse cx="196" cy="112" rx="28" ry="14" fill="${c.mapWater}"/>
+
+          <!-- Street Grid -->
+          ${[90, 122, 152, 198, 240, 285, 335, 390, 450].map(y =>
+            `<line x1="0" y1="${y}" x2="356" y2="${y}" stroke="${y===152||y===198 ? c.mapMajor : c.mapRoad}" stroke-width="${y===152 ? 8 : 4.5}"/>`
+          ).join("")}
+          ${[38, 58, 110, 145, 215, 270, 320].map(x =>
+            `<line x1="${x}" y1="0" x2="${x}" y2="640" stroke="${x===110 ? c.mapMajor : c.mapRoad}" stroke-width="${x===110 ? 8 : 4.5}"/>`
+          ).join("")}
+          <path d="M 18 0 Q 32 220 22 540" stroke="${c.mapMajor}" stroke-width="10" fill="none" opacity="0.65"/>
+
+          <!-- Dedicated Bike Lanes Layer -->
+          ${S.bikeLayer ? `
+            <path d="M 215 30 L 215 152 Q 258 175 282 360" stroke="${c.mapBike}" stroke-width="4" stroke-dasharray="6 4" fill="none"/>
+            <line x1="58" y1="152" x2="248" y2="152" stroke="${c.mapBike}" stroke-width="3.5" stroke-dasharray="5 3"/>
+            <line x1="38" y1="198" x2="145" y2="198" stroke="${c.mapBike}" stroke-width="3.5" stroke-dasharray="5 3"/>
+          ` : ''}
+
+          <!-- Map Labels -->
+          <text x="154" y="84" fill="${c.onSurfaceVar}" font-size="10" font-weight="700" opacity="0.85">PIEDMONT PARK</text>
+          <text x="224" y="144" fill="${c.primary}" font-size="9.5" font-weight="700">Eastside BeltLine</text>
+
+          <!-- Unselected Alternative Route Polylines (Drawn underneath in muted grey/blue, clickable!) -->
+          ${S.flow === "preview" ? dest.alternatives.filter((_, idx) => idx !== S.altIdx).map(alt => `
+            <path d="${alt.path}" stroke="${c.outline}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.6"/>
+            <path d="${alt.path}" stroke="${c.onSurfaceVar}" stroke-width="5" stroke-dasharray="2 8" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.85"/>
+          `).join("") : ''}
+
+          <!-- Active Selected Route Polyline (Bold Highlighted) -->
+          ${showRoutes ? `
+            <path d="${activeAlt.path}" stroke="${c.onPrimary}" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.75"/>
+            <path d="${activeAlt.path}" stroke="${c.primary}" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <circle cx="${dest.destX}" cy="${dest.destY}" r="7.5" fill="#EA4335" stroke="#fff" stroke-width="2"/>
+          ` : ''}
+
+          <!-- Rider Puck -->
+          <g transform="translate(${S.flow==='riding' ? 168 : 110}, 152)">
+            <circle r="22" fill="${c.primary}" opacity="0.20"/>
+            ${S.flow==='riding' ? `<path d="M 0 0 L 28 -18 L 28 18 Z" fill="${c.primary}" opacity="0.35"/>` : ''}
+            <circle r="9.5" fill="${c.primary}" stroke="${c.surface}" stroke-width="3"/>
+            <circle r="3.5" fill="${c.onPrimary}"/>
+          </g>
+        </g>
+      </svg>
+
+      <!-- EXPLORE STATE: Snap-Map-Style Destination Pills on Map -->
+      ${S.flow === "explore" ? `
+        <div data-pickdest="0" class="tap pin-bounce absolute float-shadow rounded-full px-2.5 py-1 flex items-center gap-1.5 text-xs font-semibold"
+             style="left:192px; top:175px; background:${c.surfaceHigh}; color:${c.onSurface}; border: 1.5px solid ${c.primary}">
+          <span>🚲 Ponce Market</span>
+          <span style="color:${c.primary}">14m</span>
+        </div>
+        <div data-pickdest="1" class="tap absolute float-shadow rounded-full px-2.5 py-1 flex items-center gap-1.5 text-xs font-semibold"
+             style="left:16px; top:178px; background:${c.surfaceHigh}; color:${c.onSurface}; border: 1.5px solid ${c.outline}">
+          <span>💼 Work</span>
+          <span style="color:${c.primary}">9m</span>
+        </div>
+        <div data-pickdest="2" class="tap absolute float-shadow rounded-full px-2.5 py-1 flex items-center gap-1.5 text-xs font-semibold"
+             style="left:208px; top:248px; background:${c.surfaceHigh}; color:${c.onSurface}; border: 1.5px solid ${c.outline}">
+          <span>🌿 Krog St</span>
+          <span style="color:${c.primary}">21m</span>
+        </div>
+      ` : ''}
+
+      <!-- PREVIEW STATE: Google Maps-Style Route Callout Bubbles Directly on the Map Polylines! -->
+      ${S.flow === "preview" ? dest.alternatives.map((alt, idx) => {
+        const selected = idx === S.altIdx;
+        return `
+          <div data-pickalt="${idx}" class="tap absolute float-shadow rounded-2xl px-2.5 py-1 text-xs transition-all"
+               style="left:${alt.labelX}px; top:${alt.labelY}px; z-index:${selected ? 15 : 10};
+                      background:${selected ? c.primary : c.surfaceHigh};
+                      color:${selected ? c.onPrimary : c.onSurface};
+                      border: 1.5px solid ${selected ? c.onPrimary : c.outline}">
+            <div class="font-extrabold leading-tight flex items-center gap-1">
+              <span>🚲 ${alt.time}</span>
+              ${idx === 0 ? `<span class="text-[10px] px-1.5 py-0.2 rounded-full" style="background:rgba(0,0,0,0.2)">★ Safest</span>` : ''}
+            </div>
+            <div class="text-[11px] font-semibold opacity-90">${alt.protectedPct}% protected</div>
+          </div>`;
+      }).join("") : ''}
+    </div>`;
+}
+
+// ---------- Top Morphing Overlay ----------
+function renderTopOverlay() {
+  const c = T();
+  const ok = S.watch === "connected";
+  const dest = curDest();
+  const alt = curAlt();
+
+  // Hide top map overlay when drawer is pulled to full screen
+  if (S.sheetStop === "full") return "";
+
+  if (S.flow === "explore") {
+    return `
+      <div class="relative z-20 px-3.5 pt-1">
+        <div class="float-shadow rounded-full pl-4 pr-2 py-2 flex items-center justify-between"
+             style="background:${c.surfaceHigh}; color:${c.onSurface}">
+          <div data-pickdest="0" class="tap flex items-center gap-3 min-w-0 flex-1">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${c.primary}" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            <span class="text-sm font-medium truncate" style="color:${c.onSurfaceVar}">Search places or bike paths…</span>
+          </div>
+          <button id="watchPillBtn" title="Tap for Admin Diagnostics"
+                  class="tap flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold shrink-0"
+                  style="background:${ok ? c.primaryCont : '#5C3812'}; color:${ok ? c.onPrimaryCont : '#FFDDB8'}">
+            <span class="w-2 h-2 rounded-full" style="background:${ok ? '#81C995' : '#FFA726'}"></span>
+            <span>⌚ ${ok ? '88%' : 'Watch GPS'}</span>
+          </button>
+        </div>
+
+        <div class="flex gap-2 mt-2.5 overflow-x-auto no-scrollbar pb-1">
+          <button data-pickdest="0" class="tap float-shadow px-3 py-1.5 rounded-full text-xs font-semibold shrink-0"
+                  style="background:${c.secondaryCont}; color:${c.onSecondaryCont}">🏠 Home · 12m</button>
+          <button data-pickdest="1" class="tap float-shadow px-3 py-1.5 rounded-full text-xs font-semibold shrink-0"
+                  style="background:${c.secondaryCont}; color:${c.onSecondaryCont}">💼 Work · 9m</button>
+          <button id="toggleBikeLayer" class="tap float-shadow px-3 py-1.5 rounded-full text-xs font-semibold shrink-0"
+                  style="background:${S.bikeLayer ? c.primary : c.surfaceHigh}; color:${S.bikeLayer ? c.onPrimary : c.onSurface}">
+            🚲 Bike Lanes ${S.bikeLayer ? '✓' : ''}
+          </button>
+        </div>
+      </div>`;
+  }
+
+  if (S.flow === "preview") {
+    // Clean Google Maps Origin -> Destination Header Card (NO confusing 3 pills!)
+    return `
+      <div class="relative z-20 px-3.5 pt-1">
+        <div class="float-shadow rounded-[22px] p-2.5 flex items-center gap-2.5"
+             style="background:${c.surfaceHigh}; color:${c.onSurface}">
+          <button data-flow="explore" class="tap w-9 h-9 rounded-full flex items-center justify-center font-bold text-base shrink-0"
+                  style="background:${c.surfaceLow}; color:${c.onSurface}" title="Back to Explore">←</button>
+          <div class="min-w-0 flex-1 text-xs space-y-1">
+            <div class="flex items-center gap-2 truncate" style="color:${c.onSurfaceVar}">
+              <span class="w-2 h-2 rounded-full shrink-0" style="background:${c.primary}"></span>
+              <span class="truncate">Your location (Midtown 8th &amp; Myrtle)</span>
+            </div>
+            <div class="flex items-center gap-2 font-bold text-sm truncate">
+              <span class="w-2 h-2 rounded-full shrink-0 bg-[#EA4335]"></span>
+              <span class="truncate">${dest.name}</span>
+            </div>
+          </div>
+          <!-- Cycle destination in demo -->
+          <button id="cycleDestBtn" class="tap px-2.5 py-1.5 rounded-xl text-[11px] font-semibold shrink-0"
+                  style="background:${c.secondaryCont}; color:${c.onSecondaryCont}" title="Switch demo destination">
+            Change
+          </button>
+        </div>
+      </div>`;
+  }
+
+  // S.flow === "riding"
+  return `
+    <div class="relative z-20 px-3 pt-1">
+      <div class="rounded-[26px] p-3.5 float-shadow" style="background:${c.primaryCont}; color:${c.onPrimaryCont}">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style="background:rgba(0,0,0,0.22)">
+            ${iconArrow("left", c.onPrimaryCont, 32)}
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-2xl font-extrabold leading-none">${u("350 ft", "110 m")}</div>
+            <div class="text-sm font-semibold truncate mt-1">${alt.steps[1]?.street || alt.steps[0].street}</div>
+          </div>
+        </div>
+        <div class="mt-2.5 pt-2 border-t border-white/15 flex items-center text-xs">
+          <span>Then <b>↱ ${alt.steps[2]?.street || "Arrive"}</b></span>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ---------- 3-Stop Draggable Bottom Sheet (Peek / Half / Full Screen) ----------
+function getSheetTopPx() {
+  if (S.sheetStop === "full") return "38px"; // Covers the whole screen below status bar!
+  if (S.flow === "explore") return S.sheetStop === "peek" ? "460px" : "330px";
+  if (S.flow === "preview") return S.sheetStop === "peek" ? "445px" : "275px";
+  // riding
+  return S.sheetStop === "peek" ? "545px" : "310px";
+}
+
+function cycleSheetStop() {
+  const order = ["peek", "half", "full"];
+  const next = order[(order.indexOf(S.sheetStop) + 1) % order.length];
+  S.sheetStop = next;
+}
+
+function renderBottomSheet() {
+  const c = T();
+  const dest = curDest();
+  const alt = curAlt();
+  const topPx = getSheetTopPx();
+  const isFull = S.sheetStop === "full";
+
+  // Header bar inside the drawer to control Peek / Half / Full
+  const handleBar = `
+    <div id="sheetHandle" class="tap pt-2.5 pb-1.5 px-4 flex flex-col items-center shrink-0">
+      <div class="w-10 h-1.5 rounded-full" style="background:${c.onSurfaceVar}; opacity:0.55"></div>
+      <div class="w-full flex items-center justify-between mt-1.5 text-[11px]" style="color:${c.onSurfaceVar}">
+        <span>Drawer: <b style="color:${c.primary}">${S.sheetStop.toUpperCase()}</b> (tap handle to cycle)</span>
+        <div class="flex gap-1">
+          ${["peek","half","full"].map(st => `
+            <button data-setstop="${st}" class="px-2 py-0.5 rounded-full font-semibold"
+                    style="background:${S.sheetStop===st ? c.primary : c.surfaceHigh}; color:${S.sheetStop===st ? c.onPrimary : c.onSurfaceVar}">
+              ${st === "full" ? "Full ⤢" : st}
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    </div>`;
+
+  if (S.flow === "explore") {
+    return `
+      <div class="absolute left-0 right-0 bottom-0 z-30 ${isFull ? 'rounded-t-[18px]' : 'rounded-t-[28px]'} float-shadow flex flex-col transition-all duration-200 pb-6"
+           style="top:${topPx}; background:${c.surfaceLow}; border-top: 1px solid ${c.outline}44">
+        ${handleBar}
+        <div class="px-4 space-y-3 no-scrollbar flex-1">
+          <div class="grid grid-cols-2 gap-2.5">
+            <div data-pickdest="0" class="tap rounded-[22px] p-3" style="background:${c.surfaceHigh}">
+              <div class="flex items-center justify-between">
+                <span class="w-8 h-8 rounded-2xl flex items-center justify-center text-sm" style="background:${c.primaryCont}; color:${c.onPrimaryCont}">🏠</span>
+                <span class="text-xs font-bold" style="color:${c.primary}">12 min</span>
+              </div>
+              <div class="font-bold text-sm mt-2">Home</div>
+              <div class="text-xs truncate" style="color:${c.onSurfaceVar}">Midtown · ${u("2.3 mi", "3.7 km")}</div>
+            </div>
+
+            <div data-pickdest="1" class="tap rounded-[22px] p-3" style="background:${c.surfaceHigh}">
+              <div class="flex items-center justify-between">
+                <span class="w-8 h-8 rounded-2xl flex items-center justify-center text-sm" style="background:${c.tertiaryCont}; color:${c.onTertiaryCont}">💼</span>
+                <span class="text-xs font-bold" style="color:${c.primary}">9 min</span>
+              </div>
+              <div class="font-bold text-sm mt-2">Work</div>
+              <div class="text-xs truncate" style="color:${c.onSurfaceVar}">Tech Sq · ${u("1.6 mi", "2.6 km")}</div>
+            </div>
+          </div>
+
+          <div>
+            <div class="text-xs font-bold tracking-wide uppercase mb-2" style="color:${c.onSurfaceVar}">Recent Destinations</div>
+            <div class="space-y-2">
+              ${DESTINATIONS.map((d, i) => {
+                const best = d.alternatives[0];
+                return `
+                  <div data-pickdest="${i}" class="tap rounded-[20px] p-3 flex items-center justify-between" style="background:${c.surfaceHigh}">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <div class="w-9 h-9 rounded-2xl flex items-center justify-center shrink-0 text-sm"
+                           style="background:${c.secondaryCont}; color:${c.onSecondaryCont}">🚲</div>
+                      <div class="min-w-0">
+                        <div class="text-sm font-bold truncate">${d.name}</div>
+                        <div class="text-xs truncate" style="color:${c.onSurfaceVar}">${best.via} · ${best.protectedPct}% protected</div>
+                      </div>
+                    </div>
+                    <div class="text-right shrink-0 pl-2">
+                      <div class="text-sm font-bold" style="color:${c.primary}">${best.time}</div>
+                      <div class="text-xs" style="color:${c.onSurfaceVar}">${best.dist(u)}</div>
+                    </div>
+                  </div>`;
+              }).join("")}
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (S.flow === "preview") {
+    return `
+      <div class="absolute left-0 right-0 bottom-0 z-30 ${isFull ? 'rounded-t-[18px]' : 'rounded-t-[28px]'} float-shadow flex flex-col transition-all duration-200 pb-6"
+           style="top:${topPx}; background:${c.surfaceLow}; border-top: 1px solid ${c.outline}44">
+        ${handleBar}
+
+        <div class="px-4 space-y-3 no-scrollbar flex-1">
+          <!-- Destination Title + Selected Route Summary -->
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-base font-extrabold leading-tight">${dest.name}</div>
+              <div class="text-xs mt-0.5" style="color:${c.onSurfaceVar}">Choose a route (${dest.alternatives.length} options · Safest first)</div>
+            </div>
+            <div class="text-right shrink-0">
+              <div class="text-xl font-extrabold" style="color:${c.primary}">${alt.time}</div>
+              <div class="text-xs font-medium" style="color:${c.onSurfaceVar}">${alt.dist(u)} · ETA ${alt.eta}</div>
+            </div>
+          </div>
+
+          <!-- MULTI-ROUTE SELECTOR CARDS (Sorted by Protected % Descending, Index 0 Default!) -->
+          <div class="space-y-2">
+            ${dest.alternatives.map((rt, idx) => {
+              const sel = idx === S.altIdx;
+              return `
+                <div data-pickalt="${idx}" class="tap rounded-[20px] p-3 transition-all flex items-center justify-between"
+                     style="background:${sel ? c.secondaryCont : c.surfaceHigh};
+                            border: 2px solid ${sel ? c.primary : 'transparent'};
+                            color:${sel ? c.onSecondaryCont : c.onSurface}">
+                  <div class="min-w-0 pr-2">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs font-extrabold px-2 py-0.5 rounded-full"
+                            style="background:${idx===0 ? c.primary : c.surfaceHighest}; color:${idx===0 ? c.onPrimary : c.onSurface}">
+                        🛡 ${rt.protectedPct}% protected
+                      </span>
+                      <span class="text-[11px] font-semibold opacity-85">${rt.badge}</span>
+                    </div>
+                    <div class="text-xs font-bold mt-1.5 truncate">${rt.via}</div>
+                    <div class="text-[11px] opacity-80 mt-0.5">${rt.elev(u)}</div>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <div class="text-base font-extrabold" style="color:${sel ? c.primary : c.onSurface}">${rt.time}</div>
+                    <div class="text-xs opacity-80">${rt.dist(u)}</div>
+                  </div>
+                </div>`;
+            }).join("")}
+          </div>
+
+          <!-- Primary M3 Start CTA -->
+          <button data-flow="riding" class="tap w-full py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 float-shadow"
+                  style="background:${c.primary}; color:${c.onPrimary}">
+            <span>⌚ Start Ride on Watch (${alt.time})</span>
+          </button>
+
+          <!-- Turn-by-turn steps for the currently selected route -->
+          <div class="pt-1 space-y-1.5">
+            <div class="text-xs font-bold uppercase tracking-wider" style="color:${c.onSurfaceVar}">
+              Steps for Selected Route (${alt.steps.length}) — Pull Drawer to Full ⤢
+            </div>
+            ${alt.steps.map(st => `
+              <div class="rounded-[18px] px-3.5 py-2.5 flex items-center justify-between text-xs" style="background:${c.surfaceHigh}">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background:${c.secondaryCont}">
+                    ${iconArrow(st.dir, c.onSecondaryCont, 18)}
+                  </div>
+                  <div class="min-w-0">
+                    <div class="font-bold text-xs truncate">${st.street}</div>
+                    <div class="text-[11px]" style="color:${c.onSurfaceVar}">${st.tag}</div>
+                  </div>
+                </div>
+                <span class="font-bold tabular-nums pl-2" style="color:${c.primary}">${st.dist(u)}</span>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // S.flow === "riding"
+  return `
+    <div class="absolute left-0 right-0 bottom-0 z-30 ${isFull ? 'rounded-t-[18px]' : 'rounded-t-[28px]'} float-shadow flex flex-col transition-all duration-200 pb-6"
+         style="top:${topPx}; background:${c.surfaceLow}; border-top: 1px solid ${c.outline}44">
+      ${handleBar}
+
+      <div class="px-4 space-y-3 no-scrollbar flex-1">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-2xl font-extrabold" style="color:${c.primary}">${alt.time}</div>
+            <div class="text-xs font-medium" style="color:${c.onSurfaceVar}">${alt.dist(u)} · ${alt.protectedPct}% protected · ETA ${alt.eta}</div>
+          </div>
+          <button data-flow="explore" class="tap px-5 py-2.5 rounded-full font-bold text-xs"
+                  style="background:#8C1D18; color:#F9DEDC">
+            Exit
+          </button>
+        </div>
+
+        <div class="pt-2 space-y-1.5">
+          <div class="text-xs font-bold uppercase tracking-wider" style="color:${c.onSurfaceVar}">Remaining Turns on ${alt.via}</div>
+          ${alt.steps.map(st => `
+            <div class="rounded-[18px] px-3.5 py-2.5 flex items-center justify-between text-xs" style="background:${c.surfaceHigh}">
+              <div class="flex items-center gap-3 min-w-0">
+                ${iconArrow(st.dir, c.primary, 18)}
+                <div class="min-w-0">
+                  <div class="font-bold truncate">${st.street}</div>
+                  <div class="text-[11px]" style="color:${c.onSurfaceVar}">${st.tag}</div>
+                </div>
+              </div>
+              <span class="font-bold tabular-nums pl-2" style="color:${c.onSurfaceVar}">${st.dist(u)}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    </div>`;
+}
+
+// ---------- Hidden Developer / Admin Modal ----------
+function renderAdminModal() {
+  if (!S.adminOpen) return "";
+  const c = T();
+  return `
+    <div class="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end">
+      <div class="w-full rounded-t-[28px] p-4 pb-8 space-y-3 text-xs float-shadow" style="background:${c.surface}; color:${c.onSurface}">
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full" style="background:${c.primaryCont}; color:${c.onPrimaryCont}">Admin Only · Debug</span>
+            <div class="text-base font-extrabold mt-1">Developer Diagnostics</div>
+          </div>
+          <button id="closeAdminBtn" class="tap w-8 h-8 rounded-full flex items-center justify-center font-bold" style="background:${c.surfaceHigh}">✕</button>
+        </div>
+
+        <div class="rounded-2xl p-3 space-y-1.5" style="background:${c.surfaceHigh}">
+          <div class="flex justify-between font-bold">
+            <span>Cloudflare Worker Monthly Quota</span>
+            <span style="color:${c.primary}">142 / 1,500</span>
+          </div>
+          <div class="w-full h-2 rounded-full overflow-hidden" style="background:${c.surfaceLow}">
+            <div class="h-full rounded-full" style="width:10%; background:${c.primary}"></div>
+          </div>
+          <div class="flex justify-between text-[11px]" style="color:${c.onSurfaceVar}">
+            <span>Firebase App Check: Attested ✓</span>
+            <span>KV + Room 24h Cache: 94% hit</span>
+          </div>
+        </div>
+
+        <div class="rounded-2xl p-3 space-y-2" style="background:${c.surfaceHigh}">
+          <div class="font-bold">Test Watch Vibration Cues</div>
+          <div class="grid grid-cols-2 gap-1.5 font-semibold">
+            <button data-cue="Left (2x pulse)" class="tap rounded-xl py-2 px-2.5 text-left" style="background:${c.secondaryCont}; color:${c.onSecondaryCont}">↰ Left (2 pulses)</button>
+            <button data-cue="Right (1x long)" class="tap rounded-xl py-2 px-2.5 text-left" style="background:${c.secondaryCont}; color:${c.onSecondaryCont}">↱ Right (1 long)</button>
+            <button data-cue="Off-Route (3x buzz)" class="tap rounded-xl py-2 px-2.5 text-left" style="background:${c.surfaceHighest}">⚠ Off-Route</button>
+            <button data-cue="Arrived (Ramp)" class="tap rounded-xl py-2 px-2.5 text-left" style="background:${c.primaryCont}; color:${c.onPrimaryCont}">🏁 Arrived</button>
+          </div>
+          ${S.toast ? `<div class="text-center font-bold pt-1" style="color:${c.primary}">Sent to watch: ${S.toast}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+const FLOW_INFO = {
+  explore: {
+    label: "1 · Explore",
+    title: "Explore State · Pick a Destination",
+    desc: "Tap any place on the Atlanta map or in the bottom drawer. You can pull the drawer to Peek, Half, or Full Screen.",
+    notes: [
+      "<b>Tap any destination</b> (<i>Ponce City Market</i>, <i>Work · Tech Square</i>, <i>Krog Street Market</i>) to query the routes and open <b>Route Preview</b>.",
+      "<b>Pull Drawer to Full Screen:</b> Tap <code>Full ⤢</code> on the drawer header (or click the drag handle) to expand the drawer over the entire screen."
+    ]
+  },
+  preview: {
+    label: "2 · Choose Route (Safest Default)",
+    title: "Route Preview · Multiple API Routes (Highest % Protected Selected First)",
+    desc: "The top bar now shows a clean Origin → Destination card. Both the map and the drawer display all alternative routes returned by the Transit API for that destination, with the highest % protected bike path selected by default.",
+    notes: [
+      "<b>Default Route = Highest % Protected Path:</b> For Ponce City Market, the API returns 3 options: <b>92% protected</b> (14 min via BeltLine — <i>auto-selected ★</i>), <b>76% protected</b> (16 min quiet streets), and <b>48% protected</b> (11 min direct arterial).",
+      "<b>Pick Any Route on Map or Drawer:</b> Tap any route card in the drawer OR tap the floating callout bubbles directly on the map polylines to switch routes.",
+      "<b>Full-Screen Pull-Up Drawer:</b> Tap <code>Full ⤢</code> on the drawer to pull it all the way up and inspect every route option and turn step."
+    ]
+  },
+  riding: {
+    label: "3 · Active Riding",
+    title: "Active Riding State · Live Turn Card + Expandable Drawer",
+    desc: "Navigating along the chosen route. Pull the bottom drawer up to Full Screen at a stoplight if you want to inspect all remaining turns.",
+    notes: [
+      "<b>Matches Your Chosen Route:</b> Uses the exact route alternative you picked in Route Preview.",
+      "<b>3-Stop Drawer while Riding:</b> Defaults to compact peek bar at the bottom, or pull up to Half / Full Screen."
+    ]
+  }
+};
+
+function render() {
+  const c = T();
+  const pf = document.getElementById("phoneFrame");
+  pf.style.background = c.bg;
+  pf.style.color = c.onSurface;
+  document.getElementById("statusBar").style.color = c.onSurface;
+  document.getElementById("gestureBar").style.background = c.surfaceLow;
+  document.getElementById("gestureBar").style.color = c.onSurfaceVar;
+
+  // Flow pills
+  document.getElementById("statePills").innerHTML = Object.entries(FLOW_INFO).map(([k, v]) => `
+    <button data-flow="${k}" class="px-3.5 py-1.5 rounded-full text-sm border border-[var(--border)] ${S.flow===k ? 'bg-[var(--primary)] text-[var(--primary-foreground)] font-medium' : 'bg-[var(--card)]'}">${v.label}</button>
+  `).join("");
+
+  // Drawer height pills in top workshop bar
+  document.getElementById("sheetStopPills").innerHTML = `<span class="px-2 text-[var(--muted-foreground)]">Drawer:</span>` +
+    [["peek","Peek"],["half","Half"],["full","Full Screen ⤢"]].map(([st, lbl]) => `
+      <button data-setstop="${st}" class="px-2.5 py-1 rounded-full font-medium ${S.sheetStop===st ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : ''}">${lbl}</button>
+    `).join("");
+
+  // Render phone body
+  document.getElementById("screenBody").innerHTML =
+    renderPersistentMap() +
+    renderTopOverlay() +
+    renderBottomSheet() +
+    renderAdminModal();
+
+  // Notes panel
+  const info = FLOW_INFO[S.flow];
+  document.getElementById("screenTitle").textContent = info.title;
+  document.getElementById("screenDesc").textContent = info.desc;
+  document.getElementById("screenNotes").innerHTML = info.notes.map(n => `<li>${n}</li>`).join("");
+
+  // Bind events
+  document.querySelectorAll("[data-flow]").forEach(el => el.onclick = () => {
+    S.flow = el.dataset.flow;
+    S.sheetStop = S.flow === "riding" ? "peek" : "half";
+    render();
+  });
+  document.querySelectorAll("[data-pickdest]").forEach(el => el.onclick = () => {
+    S.destIdx = +el.dataset.pickdest;
+    S.altIdx = 0; // Always default to index 0 (highest % protected path)!
+    S.flow = "preview";
+    S.sheetStop = "half";
+    render();
+  });
+  document.querySelectorAll("[data-pickalt]").forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    S.altIdx = +el.dataset.pickalt;
+    render();
+  });
+  document.querySelectorAll("[data-setstop]").forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    S.sheetStop = el.dataset.setstop;
+    render();
+  });
+  document.querySelectorAll("[data-cue]").forEach(el => el.onclick = () => {
+    S.toast = el.dataset.cue;
+    render();
+  });
+
+  const sh = document.getElementById("sheetHandle");
+  if (sh) sh.onclick = () => { cycleSheetStop(); render(); };
+  const cdb = document.getElementById("cycleDestBtn");
+  if (cdb) cdb.onclick = () => {
+    S.destIdx = (S.destIdx + 1) % DESTINATIONS.length;
+    S.altIdx = 0; // Reset to safest route default
+    render();
+  };
+  const tbl = document.getElementById("toggleBikeLayer");
+  if (tbl) tbl.onclick = () => { S.bikeLayer = !S.bikeLayer; render(); };
+  const wpb = document.getElementById("watchPillBtn");
+  if (wpb) wpb.onclick = () => { S.adminOpen = true; render(); };
+  const cab = document.getElementById("closeAdminBtn");
+  if (cab) cab.onclick = () => { S.adminOpen = false; S.toast = ""; render(); };
+}
+
+document.getElementById("adminToggleBtn").onclick = () => { S.adminOpen = !S.adminOpen; render(); };
+document.getElementById("seed").onchange = e => { S.seed = e.target.value; render(); };
+document.getElementById("mode").onchange = e => { S.mode = e.target.value; render(); };
+document.getElementById("watchStatus").onchange = e => { S.watch = e.target.value; render(); };
+document.getElementById("units").onchange = e => { S.units = e.target.value; render(); };
+
+render();
+</script>
+</body>
+</html>
