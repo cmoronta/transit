@@ -1,0 +1,2 @@
+# Copy this file to .dev.vars (which is gitignored) and fill in your Transit API key:
+TRANSIT_API_KEY=your_transit_api_key_here

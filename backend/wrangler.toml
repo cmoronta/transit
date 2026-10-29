@@ -1,0 +1,23 @@
+name = "transit-bike-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-02-14"
+
+[vars]
+FIREBASE_PROJECT_ID = "your-firebase-project-id"
+FIREBASE_PROJECT_NUMBER = "your-firebase-project-number"
+MONTHLY_QUOTA_LIMIT = "1480"
+PER_MINUTE_RATE_LIMIT = "4"
+PER_USER_DAILY_LIMIT = "40"
+
+[[kv_namespaces]]
+binding = "ROUTE_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[durable_objects]
+bindings = [
+  { name = "QUOTA_DO", class_name = "QuotaLimiterDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QuotaLimiterDO"]

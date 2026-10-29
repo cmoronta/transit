@@ -1,0 +1,106 @@
+{
+  "results": [
+    {
+      "duration": 840,
+      "distance": 4510,
+      "start_time": 1761753600,
+      "end_time": 1761754440,
+      "legs": [
+        {
+          "leg_mode": "personal_bike",
+          "duration": 840,
+          "distance": 4510,
+          "start_time": 1761753600,
+          "end_time": 1761754440,
+          "polyline": "g~_mE~fnaO??_@mB_@mB_@mB_@mB??r@aDr@aD??lC_IlC_I",
+          "steps": [
+            {
+              "instruction": "Head east on 10th St NE Cycletrack",
+              "street_name": "10th St NE Cycletrack",
+              "relative_direction": "RIGHT",
+              "distance": 965,
+              "duration": 180,
+              "start_lat": 33.7795,
+              "start_lon": -84.3834,
+              "cycleway": "protected_lane",
+              "elevation_gain": 6
+            },
+            {
+              "instruction": "Turn right onto Monroe Dr NE",
+              "street_name": "Monroe Dr NE",
+              "relative_direction": "RIGHT",
+              "distance": 110,
+              "duration": 25,
+              "start_lat": 33.7815,
+              "start_lon": -84.3688,
+              "cycleway": "crosswalk",
+              "elevation_gain": 2
+            },
+            {
+              "instruction": "Turn left onto Atlanta BeltLine Eastside Trail",
+              "street_name": "Atlanta BeltLine Eastside Trail",
+              "relative_direction": "LEFT",
+              "distance": 3360,
+              "duration": 615,
+              "start_lat": 33.7805,
+              "start_lon": -84.3685,
+              "cycleway": "protected_trail",
+              "elevation_gain": 17
+            },
+            {
+              "instruction": "Turn right toward Ponce City Market Bike Valet",
+              "street_name": "Ponce City Market Shed Ramp",
+              "relative_direction": "RIGHT",
+              "distance": 75,
+              "duration": 20,
+              "start_lat": 33.7728,
+              "start_lon": -84.3654,
+              "cycleway": "protected_trail",
+              "elevation_gain": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "duration": 660,
+      "distance": 3380,
+      "start_time": 1761753600,
+      "end_time": 1761754260,
+      "legs": [
+        {
+          "leg_mode": "personal_bike",
+          "duration": 660,
+          "distance": 3380,
+          "start_time": 1761753600,
+          "end_time": 1761754260,
+          "polyline": "g~_mE~fnaO??rC_@rC_@??_@_I_@_I",
+          "steps": [
+            {
+              "instruction": "Head south on Peachtree St NE",
+              "street_name": "Peachtree St NE",
+              "relative_direction": "RIGHT",
+              "distance": 1120,
+              "duration": 220,
+              "start_lat": 33.7795,
+              "start_lon": -84.3834,
+              "cycleway": "shared_road",
+              "elevation_gain": 12
+            },
+            {
+              "instruction": "Turn left onto Ponce de Leon Ave NE",
+              "street_name": "Ponce de Leon Ave NE",
+              "relative_direction": "LEFT",
+              "distance": 2260,
+              "duration": 440,
+              "start_lat": 33.7726,
+              "start_lon": -84.3834,
+              "cycleway": "painted_lane",
+              "elevation_gain": 9
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
