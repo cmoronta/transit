@@ -1,36 +1,53 @@
-# Wear OS & Phone Companion Bike Navigator (Transit API + Cloudflare Worker Proxy): Architecture Plan
+# Wear OS & Phone Companion Bike Navigator (Transit API v4 + Cloudflare Worker): Architecture Plan
 
 ## Goal
-Build a full **Wear OS 4+ (API 33+) watch app + Android phone companion app + Cloudflare Worker backend proxy** (`~/.gemini/antigravity/scratch/transit-bike-wear`) that delivers **turn-by-turn bike directions** on your wrist using **haptic vibration cues**, an **Always-On Display (AOD) Ride screen** (with toggleable **Turn View** and draggable/crown-zoomable **MapLibre + OpenFreeMap** map), a **Wear OS Tile**, and a **Watch Face Complication**.
-
-### Finalized Design & Architecture Decisions
-- **Zero API Keys on Any Device**:
-  - Your Transit API key (`TRANSIT_API_KEY`) lives **exclusively in a Cloudflare Worker Secret** (`wrangler secret put TRANSIT_API_KEY`). Neither the watch APK nor the phone APK ever stores or sees the Transit API key.
-  - **Authentication & Attestation**: The phone app authenticates to your Cloudflare Worker using **Firebase Auth** (`Authorization: Bearer <ID-Token>`, locked to your allowlisted UID) + **Firebase App Check with Play Integrity** (`X-Firebase-AppCheck` header, attesting that the request comes from your untampered Android app on a genuine Play-certified device). The Worker verifies both JWTs against Google's public JWKS endpoints before serving any request.
-  - **Edge Caching & Quota Enforcement in Cloudflare KV**: The Worker normalizes `(fromPlace, toPlace)` to a ~100 m grid, caches bike routes in **Cloudflare KV** for 24 hours, enforces the **4 req/min** rate limit and **1,500 calls/month** budget in KV, and returns quota headers (`X-Quota-Used`, `X-Quota-Limit`, `X-Cache`) so the phone app can display live usage.
-- **Design Workshops**:
-  - Watch Tile & App Workshop: [tile_design_workshop.html](file:///Users/cmoronta/.gemini/antigravity/brain/54afc5b4-b1ec-448f-b0a4-69f66396ce25/tile_design_workshop.html)
-  - Phone Companion App Workshop (Rev 2 — Cloud Proxy & App Check): [phone_design_workshop.html](file:///Users/cmoronta/.gemini/antigravity/brain/54afc5b4-b1ec-448f-b0a4-69f66396ce25/phone_design_workshop.html)
-- **Map Stack**: **MapLibre Native for Android** (`org.maplibre.gl:android-sdk`) + **OpenFreeMap** vector tiles (`https://tiles.openfreemap.org/styles/liberty` / dark). Completely free, open-source OSM data, zero API keys required.
-- **GPS Strategy (Phone → Watch Fallback)**:
-  - **Primary**: Phone `FusedLocationProviderClient` (phone in pocket or mount) drives `NavigationEngine` to save watch battery.
-  - **Fallback**: The full `RouteModel` is synced to the watch at ride start (`/nav/route`). Because `NavigationEngine` lives in `:shared`, if the watch loses Bluetooth connection (`CapabilityClient` / heartbeat timeout > 6 s), the watch automatically starts its own `FusedLocationProviderClient` and runs `NavigationEngine` locally until the phone reconnects.
-- **Units**: Follow phone locale (`Locale.getDefault()` — US Imperial `mi`/`ft` by default in the US, `km`/`m` in metric locales), synced to the watch.
-- **Default Region & Test Fixtures**: **Atlanta, GA** (Midtown, Eastside BeltLine Trail, Ponce City Market, Piedmont Park, Georgia Tech).
-- **Rerouting**: Automatic reroute after **15 s** off-route (> 40 m from polyline), **max 1 per 20 s**, **max 10 per trip**.
-- **Android 14+ Pocket Start**: Request `ACCESS_BACKGROUND_LOCATION` ("Allow all the time") on the phone companion app so tapping Home/Work/Recent on the watch Tile cleanly starts `NavigationForegroundService` with `foregroundServiceType="location"` while the phone stays locked in your pocket.
+Build a Play Store-ready **Wear OS 4+ (API 33+) watch app + Android phone companion app + Cloudflare Worker backend** (`/Users/cmoronta/Desktop/transit`) that delivers **turn-by-turn bike directions** on your wrist using **haptic vibration cues**, an **Always-On Display (AOD) Ride screen** (with toggleable **Turn View** and **Map View**), a **Wear OS Tile**, and a **Watch Face Complication**.
 
 ---
 
-## User Review Required
+## Finalized Architecture & Product Decisions
 
-> [!IMPORTANT]
-> **Ready to Scaffold & Build**
-> Once you approve this plan, I will scaffold the entire repository in `/Users/cmoronta/Desktop/transit` including:
-> 1. `backend/` — The **Cloudflare Worker + KV** TypeScript project (with JWT verification for Firebase Auth & App Check, KV 24h route cache, KV monthly/per-minute quota guard, and Vitest unit tests).
-> 2. `:shared`, `:mobile`, and `:wear` — The complete Android & Wear OS multi-module project and unit test suites.
->
-> *(For Phase 0, you can either deploy the Worker with `wrangler secret put TRANSIT_API_KEY` and capture a live Atlanta response, or we will build against a realistic OTP v3 Atlanta BeltLine JSON fixture right away and plug in your live Worker URL in Settings.)*
+### 1. Security, Auth & Multi-User Quotas (Play Store Ready)
+- **Zero API Keys on Any Device**: `TRANSIT_API_KEY` lives exclusively in a Cloudflare Worker Secret (`wrangler secret put TRANSIT_API_KEY`).
+- **One-Tap Google Sign-In + Firebase App Check (Play Integrity)**:
+  - Users sign in with **Google Sign-In only** (Android `CredentialManager` + Firebase Auth).
+  - Every request to the Worker carries `Authorization: Bearer <Firebase-ID-Token>` and `X-Firebase-AppCheck: <Play-Integrity-JWT>`.
+- **Admin Diagnostics Gated by Firebase Custom Claim (`admin: true`)**:
+  - Your personal account receives the Firebase custom claim `{"admin": true}` (via a one-time Admin SDK script).
+  - Both the Android phone app (before unlocking the hidden Admin Diagnostics sheet) and the Cloudflare Worker (`GET /v1/admin/quota`) verify `token.admin === true`. Regular Play Store users never see admin controls or internal quota metrics.
+- **Strongly Consistent Quota Guard via Cloudflare Durable Objects + KV Edge Cache**:
+  - **Cloudflare Durable Object (`QuotaLimiterDO`)**: Solves KV's eventual-consistency race condition. Enforces atomic counters for:
+    1. Upstream rate limit (**≤ 4 req/min** global token bucket).
+    2. Global monthly cap (**1,480 / 1,500 calls/month** on the free tier; configurable via env var when upgraded to a partner plan).
+    3. Per-user daily/monthly fairness cap (`user:<uid>`) so no single public user can exhaust the shared quota.
+  - **Cloudflare KV (`ROUTE_KV`)**: Used strictly for the **24-hour edge route cache** (`route:v4:<fromGrid100m>:<toGrid100m>:<profile>`). Because KV is shared globally across all users in Atlanta, popular BeltLine and Midtown routes cached by one rider serve subsequent riders with **0 Transit API calls**.
+
+### 2. Transit API v4 (`/v4/public/plan`) & Quota-Saving Route Selection
+- **Exclusively Transit API v4**:
+  - Endpoint: **`GET https://external.transitapp.com/v4/public/plan`**
+  - Core parameters: `mode=bike`, `from_lat`, `from_lon`, `to_lat`, `to_lon`, `locale` (plus future-ready support for `secondary_mode_legs=first_and_last_legs` and `sharing_system_type=docked_bikeshare` when you add multimodal/bikeshare later).
+  - Header: `apiKey: <TRANSIT_API_KEY>` injected by the Cloudflare Worker.
+- **Adaptive Route Ranking & Quota-Saving "More Routes" Flow**:
+  1. **Phase 0 Live v4 Spike (`backend/scripts/spike-transit-v4.ts`)**: We make a single live call to `/v4/public/plan?mode=bike` for an Atlanta Midtown → Ponce City Market trip and save the exact v4 JSON response to `shared/src/test/resources/plan_v4_atlanta_bike.json`.
+  2. **Safest Route Selected First**:
+     - When `legs[].steps[]` include bike-infrastructure / `cycleway` tags, we compute the exact **`% protected path`** (protected distance ÷ total distance) and preselect the highest-% route as **`Safest · Default ★`**.
+     - If step-level infrastructure tags are omitted in a region, we rank using Transit v4's safety-first default ordering and label the primary route **`Safest · Default ★`**.
+  3. **Lazy `+ More routes` Button**: Picking a destination makes **only 1 API call**. If only 1 route comes back and alternative profiles are supported, the drawer shows a **`+ More routes`** pill that fetches alternatives only when tapped.
+
+### 3. Watch Map Strategy: MapLibre Prototype + Lightweight Canvas Fallback
+- We define a clean composable abstraction `WatchRouteMap(...)` in `:wear` with two implementations selectable at runtime:
+  1. **`MapLibreWatchMap`**: Full OpenFreeMap vector street map (`org.maplibre.gl:android-sdk`) with pan, crown zoom (`onRotaryScrollEvent`), and ambient low-bit mode. Tested early on your physical Wear OS watch.
+  2. **`CanvasVectorRouteMap` (Built-In Fallback)**: Pure Jetpack Compose `Canvas` renderer that draws the decoded route polyline, upcoming turn highlight, rider heading cone, cardinal compass ring, and street name labels at 60 fps with **zero tile downloads and minimal battery/RAM impact**. Used automatically in low-battery/offline states or if MapLibre feels heavy on your watch.
+
+### 4. GPS Strategy & Early Risk Prototyping
+- **Phone GPS Primary → Watch GPS Autonomous Fallback**:
+  - Phone `FusedLocationProviderClient` drives `:shared`'s `NavigationEngine` while Bluetooth is connected.
+  - Because the full `RouteModel` is synced to the watch at ride start (`/nav/route`), if the phone disconnects for > 6 s, the watch activates its own `FusedLocationProviderClient` and runs `NavigationEngine` locally to keep firing turn haptics along the synced route (while disconnected from the phone, the watch follows the cached route and shows a compass bearing if off-route, since only the phone talks to the backend for reroutes).
+- **Week-1 Prototype of Pocket Start**: We immediately test starting `NavigationForegroundService` on your physical Android phone from the watch Tile with `ACCESS_BACKGROUND_LOCATION` granted. If the OEM battery saver blocks background FGS start while locked, the watch seamlessly starts navigation using its own GPS until the phone wakes.
+
+### 5. System-Defined Material You Dynamic Color Palette (Phone & Watch)
+- **Phone (`:mobile`)**: Uses Android's native Material You wallpaper extraction via `dynamicDarkColorScheme(context)` and `dynamicLightColorScheme(context)` (automatically following `isSystemInDarkTheme()`). All UI elements — the floating `SearchBar`, filter chips, 3-stop `BottomSheetScaffold`, route cards, turn banners, and even the active route polyline & rider puck on the MapLibre canvas — pull their colors dynamically from `MaterialTheme.colorScheme` (`primary`, `onPrimary`, `primaryContainer`, `secondaryContainer`, `surfaceContainerLow`, `surfaceContainerHigh`).
+- **Watch (`:wear`)**: Uses `androidx.wear.compose.material3.dynamicColorScheme(context)` on Wear OS 4+, which extracts the user's active watch-face / system accent palette so `WearHomeScreen`, `RideScreen`, and `RideTileService` automatically match the user's watch theme (with a fallback M3 dark baseline if dynamic theming is disabled in system settings).
 
 ---
 
@@ -38,52 +55,52 @@ Build a full **Wear OS 4+ (API 33+) watch app + Android phone companion app + Cl
 
 ```mermaid
 flowchart LR
-    subgraph Cloud["Cloud & Edge"]
-        TAPI["Transit API /v3/otp/plan"]
-        CFW["Cloudflare Worker Proxy (backend/)"]
-        CFKV[("Cloudflare KV: 24h Route Cache + Monthly Quota")]
+    subgraph Cloud["Cloudflare Edge & Transit API v4"]
+        TAPI["Transit API v4 (GET /v4/public/plan?mode=bike)"]
+        CFW["Cloudflare Worker (backend/)"]
+        CFDO[["Durable Object: QuotaLimiterDO (Atomic 4/min, 1500/mo, per-UID)"]]
+        CFKV[("Cloudflare KV: 24h Shared Route Cache")]
         FB["Firebase Auth + App Check JWKS"]
         OFM["OpenFreeMap Vector Tiles (OSM)"]
     end
 
     subgraph Shared["Shared Module (:shared)"]
-        MODEL["RouteModel, Maneuver, NavState"]
+        MODEL["RouteModel, Maneuver, NavState, UnitFormatter"]
         CONTRACT["DataLayerContract (/trip, /nav, /favorites, /recents, /search)"]
         ENGINE["NavigationEngine (pure Kotlin snap-to-route, cues, off-route)"]
     end
 
     subgraph Phone["Phone Companion App (:mobile)"]
-        UI_P["M3 Compose UI: Home/Search, Route Preview, Active Ride, Proxy & Quota Settings"]
-        FBA["FirebaseAuth + PlayIntegrity AppCheck Token Provider"]
-        GEO["Android Geocoder (Atlanta bounding box, 0 API calls)"]
-        REPO["RouteRepository (Retrofit -> Worker + 24h Room Cache)"]
+        UI_P["UnifiedMapScreen (Explore -> RoutePreview -> ActiveRiding + 3-Stop Drawer)"]
+        ADMIN_P["AdminDiagnosticsSheet (Requires 'admin: true' Firebase claim)"]
+        AUTH_P["Google Sign-In (CredentialManager) + Play Integrity AppCheck"]
+        REPO["RouteRepository (24h Room Cache -> Worker Proxy)"]
         FGS["NavigationForegroundService (Phone FusedLocation)"]
         DL_P["PhoneWearSync (DataClient + MessageClient)"]
     end
 
     subgraph Watch["Wear OS 4+ App (:wear)"]
-        DL_W["WearListenerService + NodeWatchdog"]
-        W_LOC["Watch Fallback GPS (activates if phone disconnects)"]
+        DL_W["WearListenerService + WatchFallbackGpsManager"]
         STATE["NavStateStore (DataStore + StateFlow)"]
         HAP["HapticCueEngine (Waveform patterns)"]
-        HOME_W["HomeScreen (Home · Search · Work + TransformingLazyColumn Recents)"]
-        RIDE_W["RideScreen (TurnView <-> MapLibre MapView + AOD + OngoingActivity)"]
+        HOME_W["WearHomeScreen (Home · Search · Work + TransformingLazyColumn Recents)"]
+        RIDE_W["RideScreen (TurnView <-> MapLibre / Canvas Fallback + AOD + OngoingActivity)"]
         TILE_W["RideTileService (ProtoLayout M3)"]
         COMP_W["EtaComplicationService"]
     end
 
     UI_P --> REPO
-    FBA --> REPO
+    AUTH_P --> REPO
     REPO -->|"Bearer ID-Token + X-Firebase-AppCheck"| CFW
     CFW <--> CFKV
-    CFW -.->|"Verify JWTs"| FB
+    CFW <--> CFDO
+    CFW -.->|"Verify JWTs + 'admin' claim"| FB
     CFW -->|"Header: apiKey (Worker Secret)"| TAPI
-    UI_P --> GEO
     FGS --> ENGINE
     FGS --> DL_P
     DL_P <-->|"DataClient & MessageClient"| DL_W
     DL_W --> STATE
-    W_LOC -->|"When phone disconnected"| ENGINE
+    DL_W -->|"Phone disconnected > 6s"| ENGINE
     STATE --> HAP
     STATE --> RIDE_W
     STATE --> TILE_W
@@ -95,138 +112,69 @@ flowchart LR
 
 ---
 
-## Proposed Project Structure & Component Details
-
-Project root: `/Users/cmoronta/Desktop/transit`
+## Repository Structure (`/Users/cmoronta/Desktop/transit`)
 
 ```text
-transit-bike-wear/
-├── backend/                   # Cloudflare Worker + KV proxy (TypeScript + Wrangler + Vitest)
+/Users/cmoronta/Desktop/transit/
+├── docs/
+│   ├── architecture_plan.md
+│   ├── architecture_review.md
+│   ├── phone_design_workshop.html
+│   └── tile_design_workshop.html
+├── backend/                   # Cloudflare Worker + Durable Object + KV (TypeScript + Wrangler + Vitest)
 │   ├── wrangler.toml
 │   ├── package.json
+│   ├── scripts/
+│   │   ├── spike-transit-v4.ts    # Phase 0 live test script for GET /v4/public/plan?mode=bike
+│   │   └── set-admin-claim.ts     # Sets Firebase custom claim { admin: true } on your UID
 │   ├── src/
-│   │   ├── index.ts           # /v1/plan & /v1/quota endpoints
-│   │   ├── auth.ts            # Firebase Auth + Firebase App Check RS256 JWKS verifier
-│   │   ├── quota.ts           # 4 req/min sliding window + 1,500/month KV counter
-│   │   └── cache.ts           # ~100m grid coordinate normalizer + 24h KV route cache
+│   │   ├── index.ts               # /v1/plan & /v1/admin/quota endpoints
+│   │   ├── auth.ts                # Firebase Auth + App Check RS256 JWKS verifier + admin claim check
+│   │   ├── quota-do.ts            # QuotaLimiterDO Durable Object (atomic rate limit, global & per-user quotas)
+│   │   └── cache.ts               # ~100m grid normalizer + 24h KV route cache
 │   └── test/
 │       └── worker.test.ts
 ├── settings.gradle.kts
 ├── build.gradle.kts
 ├── gradle/libs.versions.toml
-├── shared/                    # Kotlin library: models, DataLayerContract, PolylineDecoder, NavigationEngine
+├── shared/                    # Kotlin library: models, DataLayerContract, PolylineDecoder, TransitV4Mapper, NavigationEngine
 ├── mobile/                    # Android phone companion app (minSdk 26, targetSdk 34)
 └── wear/                      # Wear OS 4+ app (minSdk 33, targetSdk 34)
 ```
 
 ---
 
-### 1. `backend/` Module (Cloudflare Worker + KV Proxy)
+## Implementation Phases
 
-#### [NEW] `backend/src/auth.ts`
-- Uses Web Crypto API (`crypto.subtle`) to verify two tokens on every request (caching Google's JWKS keys at the edge):
-  1. `X-Firebase-AppCheck`: Verifies signature against `https://firebaseappcheck.googleapis.com/v1/jwks`, issuer `https://firebaseappcheck.googleapis.com/<PROJECT_NUMBER>`, and `aud` matching your Firebase project.
-  2. `Authorization: Bearer <ID-Token>`: Verifies signature against Google SecureToken JWKS, issuer `https://securetoken.google.com/<PROJECT_ID>`, and checks that `sub` (UID) is in the Worker's `ALLOWED_UIDS` environment variable.
+```mermaid
+flowchart LR
+    P0["Phase 0: Transit v4 API Spike + Scaffold Repo"] --> P1["Phase 1: Cloudflare Worker + Durable Object + Vitest"]
+    P1 --> P2["Phase 2: :shared TransitV4Mapper & NavigationEngine + Tests"]
+    P2 --> P3["Phase 3: :mobile Unified Map App + Early Pocket-Start Test"]
+    P3 --> P4["Phase 4: :wear App, Haptics, MapLibre/Canvas + Tile"]
+```
 
-#### [NEW] `backend/src/cache.ts` & `backend/src/quota.ts`
-- **Grid Cache**: Rounds `fromPlace` and `toPlace` lat/lon to 3 decimal places (~110 m) for cache key `route:v1:<fromGrid>:<toGrid>`. If found in `ROUTE_KV`, returns immediately with `X-Cache: HIT` and **0 Transit API calls**.
-- **Quota Guard**:
-  - Checks per-minute key `ratelimit:<epochMinute>` (max 4/min; returns `429 Too Many Requests` if exceeded).
-  - Checks monthly key `quota:<YYYY-MM>` (soft warning header at 1,400, hard stop at 1,480 out of 1,500).
-- **Upstream Proxy**: Calls `https://external.transitapp.com/v3/otp/plan` injecting `apiKey: env.TRANSIT_API_KEY`, caches the response in KV (`expirationTtl: 86400`), increments `quota:<YYYY-MM>`, and returns the response with `X-Quota-Used` and `X-Quota-Limit: 1500` headers.
-
----
-
-### 2. `:shared` Module (Pure Navigation & Serialization Logic)
-
-#### [NEW] `shared/src/main/kotlin/com/transitbike/shared/model/RouteModel.kt`
-- `@Serializable` models for `RouteModel`, `LatLng`, `Maneuver`, `ManeuverType` (`LEFT`, `RIGHT`, `SLIGHT_LEFT`, `SLIGHT_RIGHT`, `STRAIGHT`, `U_TURN`, `ARRIVE`), `NavState`, `FavoritePlace`, `RecentRide`, `QuotaStatus`, and `UnitSystem` (`IMPERIAL`, `METRIC`).
-- `UnitFormatter`: formats distances (`350 ft` / `0.6 mi` vs `110 m` / `950 m`) according to the active `UnitSystem` derived from `Locale.getDefault()`.
-
-#### [NEW] `shared/src/main/kotlin/com/transitbike/shared/datalayer/DataLayerContract.kt`
-| Path | API | Direction | Purpose |
-|---|---|---|---|
-| `/trip/start` | `MessageClient` | Watch → Phone | Start ride to `{favoriteId}` or `{lat, lon, label}` |
-| `/trip/stop` | `MessageClient` | Both | Stop active navigation |
-| `/nav/route` | `DataClient` | Phone → Watch | Full `RouteModel` so watch can render polyline & run fallback GPS |
-| `/nav/cue` | `MessageClient` | Phone → Watch | Immediate haptic trigger `{maneuver, distanceM, threshold}` |
-| `/nav/state` | `DataClient` | Phone → Watch | Throttled state (`distToNextM`, `etaEpochMs`, `remainingM`, `status`) |
-| `/favorites` | `DataClient` | Phone → Watch | Home & Work coordinates + cached duration/distance |
-| `/recents` | `DataClient` | Phone → Watch | Recent rides list for `HomeScreen` scroll |
-| `/search/query` & `/search/results` | `MessageClient` | Watch ↔ Phone | Voice/keyboard search on watch geocoded by phone |
-
-#### [NEW] `shared/src/main/kotlin/com/transitbike/shared/nav/NavigationEngine.kt`
-- Snaps GPS fixes to the active route polyline using a forward-biased segment window.
-- Fires `Cue` events once per maneuver at **200 m (~650 ft)**, **50 m (~160 ft)**, and **15 m ("Now")**.
-- Detects **off-route** (> 40 m from polyline continuously for 15 s) and triggers `RerouteRequest` if within rate limits (≥ 20 s since last reroute, < 10 reroutes this trip).
-
----
-
-### 3. `:mobile` Module (Phone Companion App)
-
-#### [NEW] `mobile/src/main/kotlin/com/transitbike/mobile/api/WorkerProxyApi.kt` & `FirebaseHeaderInterceptor.kt`
-- OkHttp interceptor fetches a fresh Firebase ID Token (`FirebaseAuth.getInstance().currentUser.getIdToken(false)`) and App Check Token (`FirebaseAppCheck.getInstance().getAppCheckToken(false)`) and attaches them to requests to your Cloudflare Worker (`https://<your-worker>.workers.dev/v1/plan`).
-- Reads `X-Quota-Used` and `X-Cache` response headers to update the local quota state displayed in Settings.
-
-#### [NEW] `mobile/src/main/kotlin/com/transitbike/mobile/data/RouteRepository.kt`
-- Checks local Room cache for `(originGrid100m, destGrid100m)` younger than 24 hours before calling `WorkerProxyApi` (which itself has the 24h Cloudflare KV cache).
-- Parses **all alternative `plan.itineraries`** returned by Transit's OTP planner into a `List<RouteModel>`, computing each route's `protectedBikePct` (percentage of total distance on dedicated cycletracks, greenways, and separated bike paths vs shared roads) and **sorting the list by `protectedBikePct` descending** so the **safest / highest-% protected route is always selected by default (`index = 0`)**.
-
-#### [NEW] `mobile/src/main/kotlin/com/transitbike/mobile/nav/NavigationForegroundService.kt`
-- Runs with `foregroundServiceType="location"` while a trip is active.
-- Subscribes to `FusedLocationProviderClient` (1 Hz high accuracy), feeds `NavigationEngine`, and dispatches `/nav/cue` and `/nav/state` to `:wear`.
-
-#### [NEW] `mobile/src/main/kotlin/com/transitbike/mobile/ui/*` (Single-Pane Unified Google Maps Flow)
-As mocked up in Revision 5 of [phone_design_workshop.html](file:///Users/cmoronta/.gemini/antigravity/brain/54afc5b4-b1ec-448f-b0a4-69f66396ce25/phone_design_workshop.html):
-- **Single Persistent Map Canvas (`UnifiedMapScreen.kt`)**: No bottom navigation bar and zero API/cache/proxy jargon in the rider UI. A single persistent MapLibre + OpenFreeMap Atlanta canvas stays mounted at all times while the top overlay and a **3-stop (`Peek` / `Half` / `Full Screen`) M3 `BottomSheetScaffold`** morph across three states:
-  1. **`Explore` (Idle)**: Floating M3 `SearchBar` (with embedded `⌚ 88%` watch status pill), quick filter chips (*Home*, *Work*, *Bike Lanes* toggle), Snap-Map-style clickable place pills on the map, and a bottom drawer with Home/Work shortcuts and Recent Destinations that can be pulled all the way up to **Full Screen**.
-  2. **`RoutePreview` (Multi-Route Picker, Safest Default)**:
-     - **Top Overlay**: Clean Google Maps **Origin → Destination header card** (`Your location → Destination` with `←` back button).
-     - **Map**: Draws **all alternative routes** returned by the API simultaneously — unselected alternatives as muted dashed polylines and the selected route as a bold highlighted polyline, each with a tappable floating callout bubble (`14 min · 92% protected ★`).
-     - **Bottom Drawer (Pullable to Full Screen)**: Displays selectable route option cards sorted with the **highest % protected bike path selected by default (`Safest · Default ★`)**, followed by the primary *"⌚ Start Ride on Watch"* button and the turn-by-turn steps for the selected route.
-  3. **`ActiveRiding`**: Camera follows the rider beacon on the *same* map; top overlay morphs into a Google Maps-style green turn banner; bottom drawer defaults to a compact ETA + *"Exit"* trip bar (and can be pulled up to Half or Full Screen to inspect all remaining turns).
-- **Hidden Admin / Developer Diagnostics Sheet (`AdminDiagnosticsSheet.kt`)**: Accessible only to you by tapping/long-pressing the watch status pill in debug/admin mode — displays Cloudflare Worker KV monthly quota (`X / 1,500`), Firebase App Check status, cache hit rate, and the *Wrist Haptic Preview Studio* for testing watch vibrations.
-
----
-
-### 4. `:wear` Module (Wear OS 4+ App, Tile & Complication)
-
-#### [NEW] `wear/src/main/kotlin/com/transitbike/wear/sync/WearListenerService.kt` & `WatchFallbackGpsManager.kt`
-- Receives `/nav/route`, `/nav/state`, `/nav/cue`, `/favorites`, and `/recents`.
-- Monitors phone connection via `CapabilityClient` and heartbeats; if disconnected for > 6 s during an active ride, starts watch `FusedLocationProviderClient` and feeds `:shared`'s `NavigationEngine` locally on the watch until the phone reconnects.
-
-#### [NEW] `wear/src/main/kotlin/com/transitbike/wear/haptics/HapticCueEngine.kt`
-- `VibrationEffect.createWaveform` patterns:
-  - **Left**: 2 crisp pulses (intensity scales at 200 m → 50 m → Now).
-  - **Right**: 1 long pulse (intensity scales at 200 m → 50 m → Now).
-  - **Continue / Slight**: 1 soft tick.
-  - **Off-route**: 3 rapid strong buzzes.
-  - **Arrived**: Celebratory rising ramp.
-
-#### [NEW] `wear/src/main/kotlin/com/transitbike/wear/ui/home/WearHomeScreen.kt`
-- Matches the [watch workshop](file:///Users/cmoronta/.gemini/antigravity/brain/54afc5b4-b1ec-448f-b0a4-69f66396ce25/tile_design_workshop.html): `TransformingLazyColumn` with *"Ride to"* header, **Home · Search · Work** M3 button group (Search is larger filled primary button launching `RemoteInput`), bouncing chevron, and **Recent trips** tonal buttons below.
-
-#### [NEW] `wear/src/main/kotlin/com/transitbike/wear/ui/ride/RideScreen.kt`
-- **Turn View ↔ Map View** toggled via bottom M3 `EdgeButton`.
-- **Map View**: MapLibre `MapView` rendering OpenFreeMap vector tiles + route `Polyline` + rider heading chevron + top next-turn pill. Dragging pans and shows a recenter button; rotating the watch crown zooms (`onRotaryScrollEvent`).
-- **Always-On Display (AOD) & `OngoingActivity`**: `AmbientLifecycleObserver` switches both views into low-bit/outlined ambient rendering with burn-in pixel shifting, while `OngoingActivity` keeps `RideScreen` pinned over the watch face throughout the ride.
-
-#### [NEW] `wear/src/main/kotlin/com/transitbike/wear/tile/RideTileService.kt` & `EtaComplicationService.kt`
-- M3 ProtoLayout Tile supporting all 5 states from the workshop (**Idle**, **Navigating** with dynamic-time ETA countdown, **Off-route**, **Arrived**, **Phone disconnected**).
-- `SHORT_TEXT` & `RANGED_VALUE` watch-face complication for ETA and trip progress.
+1. **Phase 0 (`backend/scripts/spike-transit-v4.ts`)**: Run a single live call against `GET https://external.transitapp.com/v4/public/plan?mode=bike` for an Atlanta Midtown → Ponce City Market bike trip, save the real JSON fixture to `shared/src/test/resources/plan_v4_atlanta_bike.json`, and lock in the exact v4 step/polyline/cycleway fields.
+2. **Phase 1 (`backend/`)**: Implement the Cloudflare Worker proxying `/v4/public/plan`, `QuotaLimiterDO` Durable Object, `ROUTE_KV` cache, and Firebase JWT verifier, verified with `npm test` (Vitest).
+3. **Phase 2 (`:shared`)**: Implement `RouteModel`, `PolylineDecoder`, `TransitV4ResponseMapper`, `UnitFormatter`, `DataLayerContract`, and `NavigationEngine` + unit tests.
+4. **Phase 3 (`:mobile`)**: Implement the single-pane `UnifiedMapScreen` (Explore, Route Preview with `Safest · Default ★` + `+ More routes`, Active Riding, 3-stop `Peek`/`Half`/`Full` drawer), Google Sign-In, `AdminDiagnosticsSheet` (gated by `admin: true` claim), and `NavigationForegroundService`. Test on your physical Android phone.
+5. **Phase 4 (`:wear`)**: Implement `WearHomeScreen`, `RideScreen` (Turn View + `MapLibreWatchMap` & `CanvasVectorRouteMap` fallback + AOD + `OngoingActivity`), `HapticCueEngine`, `WatchFallbackGpsManager`, `RideTileService`, and `EtaComplicationService`. Test on your physical Wear OS watch.
 
 ---
 
 ## Verification Plan
 
 ### Automated Tests
-- **Cloudflare Worker (`backend/`)**:
-  - `npm test` (Vitest): Tests JWT auth rejection on missing/invalid App Check or non-allowlisted UID, KV cache hit returning 0 upstream calls, 4 req/min rate limiter (`429`), and 1,500/month quota enforcement.
-- **Android Modules (`:shared`, `:mobile`, `:wear`)**:
-  - `./gradlew :shared:test`: `PolylineDecoderTest`, `OtpResponseMapperTest` (against the Atlanta BeltLine OTP JSON fixture), `NavigationEngineTest` (200 m / 50 m / Now cue triggers, 15 s off-route detection, 20 s reroute cooldown, phone→watch handover continuity), and `UnitFormatterTest`.
-  - `./gradlew :mobile:testDebugUnitTest`: `RouteRepositoryTest` (Room cache hit vs Worker proxy call + quota header parsing).
-  - `./gradlew :wear:testDebugUnitTest`: `HapticCueEngineTest` & Data Layer payload serialization round-trips.
+- **Cloudflare Worker (`cd /Users/cmoronta/Desktop/transit/backend && npm test`)**:
+  - Verifies Firebase Auth & App Check JWT validation, `admin: true` custom claim enforcement on `/v1/admin/quota`, KV cache hits (0 upstream calls), and `QuotaLimiterDO` atomic rate-limiting (4/min, per-UID daily limit, 1,500/month global cap).
+- **Android Shared & App Modules (`./gradlew test`)**:
+  - `:shared:test`: `PolylineDecoderTest`, `TransitV4ResponseMapperTest`, `NavigationEngineTest` (200 m / 50 m / Now cues, 15 s off-route trigger, 20 s reroute cooldown, phone→watch GPS handover), and `UnitFormatterTest`.
+  - `:mobile:testDebugUnitTest` & `:wear:testDebugUnitTest`: Repository cache hits, lazy `+ More routes` fetching, and Data Layer serialization round-trips.
 
-### Manual Verification
-1. Deploy the Cloudflare Worker (`cd backend && npx wrangler secret put TRANSIT_API_KEY && npx wrangler deploy`).
-2. Open `/Users/cmoronta/Desktop/transit` in Android Studio, pair Phone + Wear OS 4 emulators, sign in on the phone app, and verify a simulated GPX bike ride along the Atlanta BeltLine.
+### Hardware Verification (Your Physical Phone + Watch)
+1. Deploy the Worker (`npx wrangler deploy`) and set your Transit API key (`npx wrangler secret put TRANSIT_API_KEY`).
+2. Install `:mobile` and `:wear` debug builds onto your physical Android phone and Wear OS watch via USB / Wireless Debugging in Android Studio.
+3. Verify:
+   - Starting a ride from the watch Tile while the phone is locked in your pocket.
+   - Comparing `MapLibreWatchMap` vs `CanvasVectorRouteMap` smoothness and battery impact on your physical watch.
+   - Turning off Bluetooth mid-ride to confirm the watch switches to its internal GPS within 6 seconds and continues delivering haptic turn cues.
