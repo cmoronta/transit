@@ -9,6 +9,12 @@
     "spike": "npx tsx scripts/spike-transit-v4.ts",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@hono/zod-validator": "^0.4.3",
+    "hono": "^4.7.2",
+    "jose": "^6.0.9",
+    "zod": "^3.24.2"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250214.0",
     "tsx": "^4.19.2",

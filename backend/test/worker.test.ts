@@ -1,29 +1,17 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { generateKeyPair, SignJWT } from "jose";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleWorkerRequest } from "../src/index.js";
 import { QuotaEngine, SimpleStorage } from "../src/quota-do.js";
 import { Env } from "../src/types.js";
-import { JwkKey, JwksFetcher } from "../src/auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixtureJson = fs.readFileSync(
   path.resolve(__dirname, "../../shared/src/test/resources/plan_v4_atlanta_bike.json"),
   "utf8"
 );
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function jsonToBase64Url(obj: unknown): string {
-  return bytesToBase64Url(new TextEncoder().encode(JSON.stringify(obj)));
-}
 
 class MemoryKV {
   private map = new Map<string, string>();
@@ -45,65 +33,47 @@ class MemorySimpleStorage implements SimpleStorage {
   }
 }
 
-describe("Cloudflare Worker Proxy + QuotaLimiterDO + Transit v4", () => {
+describe("Hono + jose + zod Cloudflare Worker Proxy", () => {
   let privateKey: CryptoKey;
-  let publicJwk: JwkKey;
-  const kid = "test-key-1";
+  let publicKey: CryptoKey;
   const projectId = "transit-bike-test";
   const projectNumber = "1234567890";
   const fixedNowMs = 1761753600 * 1000; // 2025-10-29T16:00:00Z
 
   beforeAll(async () => {
-    const pair = await crypto.subtle.generateKey(
-      {
-        name: "RSASSA-PKCS1-v1_5",
-        modulusLength: 2048,
-        publicExponent: new Uint8Array([1, 0, 1]),
-        hash: "SHA-256",
-      },
-      true,
-      ["sign", "verify"]
-    );
+    const pair = await generateKeyPair("RS256");
     privateKey = pair.privateKey;
-    const exported = (await crypto.subtle.exportKey("jwk", pair.publicKey)) as JwkKey;
-    publicJwk = { ...exported, kid, alg: "RS256", use: "sig" };
+    publicKey = pair.publicKey;
   });
-
-  async function signJwt(payload: Record<string, unknown>): Promise<string> {
-    const headerB64 = jsonToBase64Url({ alg: "RS256", kid, typ: "JWT" });
-    const payloadB64 = jsonToBase64Url(payload);
-    const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
-    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, data);
-    return `${headerB64}.${payloadB64}.${bytesToBase64Url(new Uint8Array(sig))}`;
-  }
 
   async function makeAuthHeaders(uid = "user-123", isAdmin = false): Promise<Record<string, string>> {
     const nowSec = Math.floor(fixedNowMs / 1000);
-    const idToken = await signJwt({
-      iss: `https://securetoken.google.com/${projectId}`,
-      aud: projectId,
-      sub: uid,
+    const idToken = await new SignJWT({
       email: "rider@example.com",
       admin: isAdmin,
-      iat: nowSec - 60,
-      exp: nowSec + 3600,
-    });
-    const appCheckToken = await signJwt({
-      iss: `https://firebaseappcheck.googleapis.com/${projectNumber}`,
-      aud: `projects/${projectNumber}`,
-      sub: "1:1234567890:android:abcdef",
-      iat: nowSec - 60,
-      exp: nowSec + 3600,
-    });
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "test-key-1" })
+      .setIssuer(`https://securetoken.google.com/${projectId}`)
+      .setAudience(projectId)
+      .setSubject(uid)
+      .setIssuedAt(nowSec - 60)
+      .setExpirationTime(nowSec + 3600)
+      .sign(privateKey);
+
+    const appCheckToken = await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256", kid: "test-key-1" })
+      .setIssuer(`https://firebaseappcheck.googleapis.com/${projectNumber}`)
+      .setAudience(`projects/${projectNumber}`)
+      .setSubject("1:1234567890:android:abcdef")
+      .setIssuedAt(nowSec - 60)
+      .setExpirationTime(nowSec + 3600)
+      .sign(privateKey);
+
     return {
       Authorization: `Bearer ${idToken}`,
       "X-Firebase-AppCheck": appCheckToken,
     };
   }
-
-  const mockJwksFetcher: JwksFetcher = async () => ({
-    keys: [publicJwk],
-  });
 
   function createTestEnv(monthlyLimit = 1480, minuteLimit = 4, userDailyLimit = 40): {
     env: Env;
@@ -153,10 +123,24 @@ describe("Cloudflare Worker Proxy + QuotaLimiterDO + Transit v4", () => {
       "https://worker.test/v1/plan?from_lat=33.7795&from_lon=-84.3834&to_lat=33.7725&to_lon=-84.3656"
     );
     const resp = await handleWorkerRequest(req, env, {
-      jwksFetcher: mockJwksFetcher,
+      authOptions: { authKeyResolver: publicKey, appCheckKeyResolver: publicKey },
       nowMs: () => fixedNowMs,
     });
     expect(resp.status).toBe(401);
+  });
+
+  it("validates query coordinates with Zod and returns 400 on invalid lat/lon", async () => {
+    const { env } = createTestEnv();
+    const headers = await makeAuthHeaders("rider-atl", false);
+    const req = new Request(
+      "https://worker.test/v1/plan?from_lat=999&from_lon=-84.3834&to_lat=33.7725&to_lon=-84.3656",
+      { headers }
+    );
+    const resp = await handleWorkerRequest(req, env, {
+      authOptions: { authKeyResolver: publicKey, appCheckKeyResolver: publicKey },
+      nowMs: () => fixedNowMs,
+    });
+    expect(resp.status).toBe(400);
   });
 
   it("proxies /v1/plan to Transit API v4 with personal_bike + safety + directions and caches in KV", async () => {
@@ -179,7 +163,7 @@ describe("Cloudflare Worker Proxy + QuotaLimiterDO + Transit v4", () => {
       { headers }
     );
     const resp1 = await handleWorkerRequest(req1, env, {
-      jwksFetcher: mockJwksFetcher,
+      authOptions: { authKeyResolver: publicKey, appCheckKeyResolver: publicKey },
       upstreamFetch,
       nowMs: () => fixedNowMs,
     });
@@ -199,35 +183,36 @@ describe("Cloudflare Worker Proxy + QuotaLimiterDO + Transit v4", () => {
       { headers }
     );
     const resp2 = await handleWorkerRequest(req2, env, {
-      jwksFetcher: mockJwksFetcher,
+      authOptions: { authKeyResolver: publicKey, appCheckKeyResolver: publicKey },
       upstreamFetch,
       nowMs: () => fixedNowMs,
     });
 
     expect(resp2.status).toBe(200);
     expect(resp2.headers.get("X-Cache")).toBe("HIT");
-    expect(upstreamCalls).toBe(1); // Still 1!
+    expect(upstreamCalls).toBe(1);
   });
 
   it("enforces the 4 req/min rate limit via QuotaLimiterDO", async () => {
-    const { env } = createTestEnv(1480, 2, 40); // minuteLimit = 2 for test
+    const { env } = createTestEnv(1480, 2, 40);
     const headers = await makeAuthHeaders("rider-1", false);
     const upstreamFetch: typeof fetch = async () => new Response(fixtureJson, { status: 200 });
+    const authOptions = { authKeyResolver: publicKey, appCheckKeyResolver: publicKey };
 
     const r1 = await handleWorkerRequest(
       new Request("https://worker.test/v1/plan?from_lat=33.71&from_lon=-84.31&to_lat=33.72&to_lon=-84.32", { headers }),
       env,
-      { jwksFetcher: mockJwksFetcher, upstreamFetch, nowMs: () => fixedNowMs }
+      { authOptions, upstreamFetch, nowMs: () => fixedNowMs }
     );
     const r2 = await handleWorkerRequest(
       new Request("https://worker.test/v1/plan?from_lat=33.73&from_lon=-84.33&to_lat=33.74&to_lon=-84.34", { headers }),
       env,
-      { jwksFetcher: mockJwksFetcher, upstreamFetch, nowMs: () => fixedNowMs }
+      { authOptions, upstreamFetch, nowMs: () => fixedNowMs }
     );
     const r3 = await handleWorkerRequest(
       new Request("https://worker.test/v1/plan?from_lat=33.75&from_lon=-84.35&to_lat=33.76&to_lon=-84.36", { headers }),
       env,
-      { jwksFetcher: mockJwksFetcher, upstreamFetch, nowMs: () => fixedNowMs }
+      { authOptions, upstreamFetch, nowMs: () => fixedNowMs }
     );
 
     expect(r1.status).toBe(200);
@@ -241,18 +226,19 @@ describe("Cloudflare Worker Proxy + QuotaLimiterDO + Transit v4", () => {
     const { env } = createTestEnv();
     const regularHeaders = await makeAuthHeaders("regular-user", false);
     const adminHeaders = await makeAuthHeaders("cmoronta-admin", true);
+    const authOptions = { authKeyResolver: publicKey, appCheckKeyResolver: publicKey };
 
     const resForbidden = await handleWorkerRequest(
       new Request("https://worker.test/v1/admin/quota", { headers: regularHeaders }),
       env,
-      { jwksFetcher: mockJwksFetcher, nowMs: () => fixedNowMs }
+      { authOptions, nowMs: () => fixedNowMs }
     );
     expect(resForbidden.status).toBe(403);
 
     const resAdmin = await handleWorkerRequest(
       new Request("https://worker.test/v1/admin/quota", { headers: adminHeaders }),
       env,
-      { jwksFetcher: mockJwksFetcher, nowMs: () => fixedNowMs }
+      { authOptions, nowMs: () => fixedNowMs }
     );
     expect(resAdmin.status).toBe(200);
     const data = (await resAdmin.json()) as { adminUid: string; quota: { monthlyLimit: number } };
