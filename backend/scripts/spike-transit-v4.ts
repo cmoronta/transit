@@ -26,14 +26,16 @@ function loadApiKey(): string {
 async function runSpike() {
   const apiKey = loadApiKey();
 
-  // Atlanta Midtown (8th & Myrtle NE) -> Ponce City Market (Eastside BeltLine)
+  // Official Transit API v4 /v4/public/plan parameters from https://api-doc.transitapp.com/v4.html#GET/v4/public/plan
   const params = new URLSearchParams({
-    mode: "bike",
+    mode: "personal_bike",
     from_lat: "33.7795",
     from_lon: "-84.3834",
     to_lat: "33.7725",
     to_lon: "-84.3656",
-    locale: "en",
+    should_include_directions: "true",
+    should_include_safety: "true",
+    num_result: "3",
   });
 
   const url = `https://external.transitapp.com/v4/public/plan?${params.toString()}`;
@@ -63,23 +65,13 @@ async function runSpike() {
   fs.writeFileSync(fixturePath, JSON.stringify(json, null, 2), "utf8");
 
   console.log(`[Phase 0 Spike] Saved response fixture to: ${fixturePath}`);
-  console.log(`[Phase 0 Spike] Top-level keys:`, Object.keys(json));
+  const results = json.results ?? [];
+  console.log(`[Phase 0 Spike] Number of results returned: ${results.length}`);
 
-  const results = json.results ?? json.itineraries ?? json.routes ?? [];
-  console.log(`[Phase 0 Spike] Number of route options returned:`, Array.isArray(results) ? results.length : "N/A");
-
-  if (Array.isArray(results) && results.length > 0) {
-    const first = results[0];
-    console.log(`[Phase 0 Spike] First route keys:`, Object.keys(first));
-    const legs = first.legs ?? [];
-    if (legs.length > 0) {
-      console.log(`[Phase 0 Spike] First leg keys:`, Object.keys(legs[0]));
-      const steps = legs[0].steps ?? legs[0].walkSteps ?? [];
-      if (steps.length > 0) {
-        console.log(`[Phase 0 Spike] First step keys:`, Object.keys(steps[0]));
-        console.log(`[Phase 0 Spike] Sample step[0]:`, JSON.stringify(steps[0], null, 2));
-      }
-    }
+  if (results.length > 0) {
+    const leg = results[0].legs?.[0];
+    console.log(`[Phase 0 Spike] First leg safety_analysis:`, JSON.stringify(leg?.safety_analysis, null, 2));
+    console.log(`[Phase 0 Spike] First leg directions[0]:`, JSON.stringify(leg?.directions?.[0], null, 2));
   }
 }
 

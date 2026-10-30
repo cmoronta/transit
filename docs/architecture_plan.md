@@ -22,17 +22,22 @@ Build a Play Store-ready **Wear OS 4+ (API 33+) watch app + Android phone compan
     3. Per-user daily/monthly fairness cap (`user:<uid>`) so no single public user can exhaust the shared quota.
   - **Cloudflare KV (`ROUTE_KV`)**: Used strictly for the **24-hour edge route cache** (`route:v4:<fromGrid100m>:<toGrid100m>:<profile>`). Because KV is shared globally across all users in Atlanta, popular BeltLine and Midtown routes cached by one rider serve subsequent riders with **0 Transit API calls**.
 
-### 2. Transit API v4 (`/v4/public/plan`) & Quota-Saving Route Selection
-- **Exclusively Transit API v4**:
-  - Endpoint: **`GET https://external.transitapp.com/v4/public/plan`**
-  - Core parameters: `mode=bike`, `from_lat`, `from_lon`, `to_lat`, `to_lon`, `locale` (plus future-ready support for `secondary_mode_legs=first_and_last_legs` and `sharing_system_type=docked_bikeshare` when you add multimodal/bikeshare later).
-  - Header: `apiKey: <TRANSIT_API_KEY>` injected by the Cloudflare Worker.
-- **Adaptive Route Ranking & Quota-Saving "More Routes" Flow**:
-  1. **Phase 0 Live v4 Spike (`backend/scripts/spike-transit-v4.ts`)**: We make a single live call to `/v4/public/plan?mode=bike` for an Atlanta Midtown → Ponce City Market trip and save the exact v4 JSON response to `shared/src/test/resources/plan_v4_atlanta_bike.json`.
-  2. **Safest Route Selected First**:
-     - When `legs[].steps[]` include bike-infrastructure / `cycleway` tags, we compute the exact **`% protected path`** (protected distance ÷ total distance) and preselect the highest-% route as **`Safest · Default ★`**.
-     - If step-level infrastructure tags are omitted in a region, we rank using Transit v4's safety-first default ordering and label the primary route **`Safest · Default ★`**.
-  3. **Lazy `+ More routes` Button**: Picking a destination makes **only 1 API call**. If only 1 route comes back and alternative profiles are supported, the drawer shows a **`+ More routes`** pill that fetches alternatives only when tapped.
+### 2. Transit API v4 (`/v4/public/plan`) Official Schema & Safety Analysis
+- **Verified against [`https://api-doc.transitapp.com/v4.html#GET/v4/public/plan`](https://api-doc.transitapp.com/v4.html#GET/v4/public/plan)**:
+  - **Endpoint**: `GET https://external.transitapp.com/v4/public/plan`
+  - **Exact Query Parameters**:
+    - `mode=personal_bike` (enum: `transit`, `microtransit`, `personal_bike`, `walk`, `shared_mobility`)
+    - `from_lat`, `from_lon`, `to_lat`, `to_lon`
+    - `should_include_directions=true` — returns the `directions[]` step array on each `SimpleLeg` (`{ length, way_name, duration, angle, instruction, polyline }`).
+    - `should_include_safety=true` — returns the native `safety_analysis` object on each `personal_bike` leg!
+    - `num_result=3` (default `3`) — returns up to 3 alternative bike routes in **a single API call**!
+  - **Native `safety_analysis` Object**:
+    - `protected_lanes_percentage` (`0–100`): Exact percentage of the leg traveled on physically protected bike lanes.
+    - `lanes_percentage` (`0–100`): Percentage on any bike lane (protected, painted, contraflow).
+    - `safe_percentage` (`0–100`): Percentage on bike lanes or low-traffic residential roads.
+    - `segments[]`: Consecutive stretches (`{ way_name, protection: "protected_lane" | "lane" | "warning" | "walk" | "default", length, polyline }`) so we can even color-code protected vs shared segments directly on the map!
+- **Default Route Selection (1 API Call Returns Up to 3 Routes)**:
+  - Because `num_result=3` returns multiple route options in a single request and `safety_analysis.protected_lanes_percentage` is natively provided by Transit v4, we sort `results[]` by `protected_lanes_percentage` descending (with `safe_percentage` as tie-breaker) and preselect the highest-% route as **`Safest · Default ★`** at **1 API call per trip**.
 
 ### 3. Watch Map Strategy: MapLibre Prototype + Lightweight Canvas Fallback
 - We define a clean composable abstraction `WatchRouteMap(...)` in `:wear` with two implementations selectable at runtime:
