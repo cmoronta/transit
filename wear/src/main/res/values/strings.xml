@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Transit Bike</string>
+    <string name="tile_name">Bike Navigation</string>
+    <string name="complication_name">Bike ETA</string>
+    <string name="tile_no_active_trip">No active ride</string>
+    <string name="tile_tap_to_start">Tap to plan trip</string>
+</resources>

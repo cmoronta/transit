@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Transit Bike</string>
+    <string name="nav_notification_title">Bike Navigation Active</string>
+    <string name="nav_notification_channel">Turn-by-turn Navigation</string>
+    <string name="search_hint">Where to ride?</string>
+    <string name="start_ride">Start Ride</string>
+    <string name="end_ride">End Ride</string>
+</resources>
