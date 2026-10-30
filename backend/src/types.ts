@@ -1,3 +1,5 @@
+import type { JWTVerifyGetKey } from "jose";
+
 export interface Env {
   TRANSIT_API_KEY: string;
   FIREBASE_PROJECT_ID: string;
@@ -35,3 +37,25 @@ export interface QuotaSnapshot {
   minuteLimit: number;
   perUserDailyLimit: number;
 }
+
+export type KeyResolver = CryptoKey | Uint8Array | JWTVerifyGetKey;
+
+export interface AuthVerifyOptions {
+  authKeyResolver?: KeyResolver;
+  appCheckKeyResolver?: KeyResolver;
+  currentDate?: Date;
+}
+
+export interface WorkerDeps {
+  authOptions?: AuthVerifyOptions;
+  upstreamFetch?: typeof fetch;
+  nowMs?: () => number;
+}
+
+export type HonoEnv = {
+  Bindings: Env;
+  Variables: {
+    caller: VerifiedCaller;
+    deps: WorkerDeps;
+  };
+};

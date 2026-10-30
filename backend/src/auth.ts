@@ -1,5 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, JWTVerifyGetKey } from "jose";
-import { Env, VerifiedCaller } from "./types.js";
+import { AuthVerifyOptions, Env, KeyResolver, VerifiedCaller } from "./types.js";
+
+export type { KeyResolver, AuthVerifyOptions };
 
 const FIREBASE_AUTH_JWKS = createRemoteJWKSet(
   new URL(
@@ -10,14 +12,6 @@ const FIREBASE_AUTH_JWKS = createRemoteJWKSet(
 const FIREBASE_APPCHECK_JWKS = createRemoteJWKSet(
   new URL("https://firebaseappcheck.googleapis.com/v1/jwks")
 );
-
-export type KeyResolver = CryptoKey | Uint8Array | JWTVerifyGetKey;
-
-export interface AuthVerifyOptions {
-  authKeyResolver?: KeyResolver;
-  appCheckKeyResolver?: KeyResolver;
-  currentDate?: Date;
-}
 
 /**
  * Verifies both:
@@ -51,10 +45,6 @@ export async function authenticateRequest(
     currentDate: options.currentDate,
   });
 
-  if (!authPayload.sub) {
-    throw new Error("Firebase ID token missing sub (UID)");
-  }
-
   const { payload: appCheckPayload } = await jwtVerify(
     appCheckToken,
     appCheckKey as JWTVerifyGetKey,
@@ -66,10 +56,14 @@ export async function authenticateRequest(
     }
   );
 
-  return {
-    uid: authPayload.sub,
-    email: typeof authPayload.email === "string" ? authPayload.email : undefined,
-    isAdmin: authPayload.admin === true,
-    appId: String(appCheckPayload.sub ?? ""),
-  };
+  const uid = typeof authPayload.sub === "string" ? authPayload.sub : "";
+  if (!uid) {
+    throw new Error("Token payload missing subject UID");
+  }
+
+  const isAdmin = authPayload.admin === true;
+  const email = typeof authPayload.email === "string" ? authPayload.email : undefined;
+  const appId = typeof appCheckPayload.sub === "string" ? appCheckPayload.sub : "";
+
+  return { uid, email, isAdmin, appId };
 }
