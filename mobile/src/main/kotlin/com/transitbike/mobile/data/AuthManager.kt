@@ -1,5 +1,6 @@
 package com.transitbike.mobile.data
 
+import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,8 +37,12 @@ class AuthManager {
             val idToken = tokenResult.token
             val isAdmin = tokenResult.claims["admin"] == true
 
-            // In production, app check token comes from FirebaseAppCheck.getInstance()
-            val appCheckToken = "mock_play_integrity_token_for_dev"
+            // Fetch live Play Integrity App Check token, with graceful dev fallback
+            val appCheckToken = try {
+                FirebaseAppCheck.getInstance().getAppCheckToken(false).await().token
+            } catch (_: Exception) {
+                "mock_play_integrity_token_for_dev"
+            }
 
             val updated = AuthState(
                 user = currentUser,

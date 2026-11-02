@@ -126,6 +126,34 @@ object PolylineDecoder {
     }
 
     /**
+     * Fast squared distance computation from a point to a segment in meters squared
+     * without allocating any intermediate heap objects.
+     */
+    fun distanceToSegmentSqM(point: LatLng, start: LatLng, end: LatLng): Double {
+        val midLatRad = Math.toRadians((start.latitude + end.latitude) / 2.0)
+        val cosMid = cos(midLatRad)
+
+        val endX = Math.toRadians(end.longitude - start.longitude) * EARTH_RADIUS_METERS * cosMid
+        val endY = Math.toRadians(end.latitude - start.latitude) * EARTH_RADIUS_METERS
+        val ptX = Math.toRadians(point.longitude - start.longitude) * EARTH_RADIUS_METERS * cosMid
+        val ptY = Math.toRadians(point.latitude - start.latitude) * EARTH_RADIUS_METERS
+
+        val lenSq = endX * endX + endY * endY
+        val fraction = if (lenSq < 1e-6) {
+            0.0
+        } else {
+            val dot = ptX * endX + ptY * endY
+            (dot / lenSq).coerceIn(0.0, 1.0)
+        }
+
+        val projX = fraction * endX
+        val projY = fraction * endY
+        val diffX = ptX - projX
+        val diffY = ptY - projY
+        return diffX * diffX + diffY * diffY
+    }
+
+    /**
      * Projects a point onto a line segment between start and end.
      */
     fun projectOntoSegment(point: LatLng, start: LatLng, end: LatLng): SnapResult {
@@ -160,7 +188,7 @@ object PolylineDecoder {
     }
 
     /**
-     * Finds the closest point on a polyline to the given point.
+     * Finds the closest point on a polyline to the given point with zero allocations inside the loop.
      */
     fun findClosestPointOnPolyline(point: LatLng, polyline: List<LatLng>): SnapResult {
         if (polyline.isEmpty()) {
@@ -170,20 +198,45 @@ object PolylineDecoder {
             return SnapResult(polyline[0], 0, haversineDistanceM(point, polyline[0]), 0.0)
         }
 
-        var minDistance = Double.MAX_VALUE
-        var bestSnap = SnapResult(polyline[0], 0, Double.MAX_VALUE, 0.0)
+        var minDistanceSq = Double.MAX_VALUE
+        var bestIndex = 0
 
         for (i in 0 until polyline.size - 1) {
-            val start = polyline[i]
-            val end = polyline[i + 1]
-            val snap = projectOntoSegment(point, start, end)
-            if (snap.distanceMeters < minDistance) {
-                minDistance = snap.distanceMeters
-                bestSnap = snap.copy(segmentIndex = i)
+            val dSq = distanceToSegmentSqM(point, polyline[i], polyline[i + 1])
+            if (dSq < minDistanceSq) {
+                minDistanceSq = dSq
+                bestIndex = i
             }
         }
 
-        return bestSnap
+        val bestSnap = projectOntoSegment(point, polyline[bestIndex], polyline[bestIndex + 1])
+        return bestSnap.copy(segmentIndex = bestIndex)
+    }
+
+    /**
+     * Computes the distance along the polyline between two snapped points.
+     */
+    fun pathDistanceBetween(
+        polyline: List<LatLng>,
+        fromSegmentIndex: Int,
+        fromPoint: LatLng,
+        toSegmentIndex: Int,
+        toPoint: LatLng
+    ): Double {
+        if (polyline.isEmpty()) return 0.0
+        if (fromSegmentIndex == toSegmentIndex) {
+            return haversineDistanceM(fromPoint, toPoint)
+        }
+        if (fromSegmentIndex > toSegmentIndex) {
+            return 0.0
+        }
+
+        var total = haversineDistanceM(fromPoint, polyline[fromSegmentIndex + 1])
+        for (i in (fromSegmentIndex + 1) until toSegmentIndex) {
+            total += haversineDistanceM(polyline[i], polyline[i + 1])
+        }
+        total += haversineDistanceM(polyline[toSegmentIndex], toPoint)
+        return total
     }
 
     /**

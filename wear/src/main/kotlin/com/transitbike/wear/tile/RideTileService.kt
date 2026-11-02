@@ -45,9 +45,19 @@ class RideTileService : TileService() {
     }
 
     private fun buildTileLayout(navState: com.transitbike.shared.model.NavState?): LayoutElementBuilders.Layout {
+        val launchAction = ActionBuilders.LaunchAction.Builder()
+            .setAndroidActivity(
+                ActionBuilders.AndroidActivity.Builder()
+                    .setPackageName(packageName)
+                    .setClassName("com.transitbike.wear.MainActivity")
+                    .build()
+            ).build()
+        val clickable = ModifiersBuilders.Clickable.Builder().setOnClick(launchAction).build()
+
         val rootColumn = LayoutElementBuilders.Column.Builder()
             .setWidth(DimensionBuilders.expand())
             .setHeight(DimensionBuilders.expand())
+            .setModifiers(ModifiersBuilders.Modifiers.Builder().setClickable(clickable).build())
             .setHorizontalAlignment(LayoutElementBuilders.HORIZONTAL_ALIGN_CENTER)
 
         if (navState != null) {

@@ -38,6 +38,7 @@ class NavigationEngine(
     val cueEvents: SharedFlow<CueEvent> = _cueEvents.asSharedFlow()
 
     private var currentManeuverIndex = 0
+    private var maneuverSegmentIndices: List<Int> = emptyList()
     private val triggeredCues = mutableSetOf<String>()
 
     private var firstOffRouteTimeMs: Long? = null
@@ -57,6 +58,14 @@ class NavigationEngine(
         triggeredCues.clear()
         firstOffRouteTimeMs = null
         rerouteCount = 0
+
+        maneuverSegmentIndices = route.maneuvers.map { maneuver ->
+            if (route.coordinates.isNotEmpty()) {
+                PolylineDecoder.findClosestPointOnPolyline(maneuver.location, route.coordinates).segmentIndex
+            } else {
+                0
+            }
+        }
 
         val firstManeuver = route.maneuvers.firstOrNull()
         val secondManeuver = route.maneuvers.getOrNull(1)
@@ -160,9 +169,21 @@ class NavigationEngine(
 
         val currentManeuver = route.maneuvers.getOrNull(currentManeuverIndex)
         val nextManeuver = route.maneuvers.getOrNull(currentManeuverIndex + 1)
+        val targetSeg = maneuverSegmentIndices.getOrNull(currentManeuverIndex) ?: snap.segmentIndex
 
         val distanceToNextManeuver = if (currentManeuver != null) {
-            PolylineDecoder.haversineDistanceM(location, currentManeuver.location)
+            if (!isCurrentlyOffTrack && targetSeg >= snap.segmentIndex) {
+                val alongPath = PolylineDecoder.pathDistanceBetween(
+                    coordinates,
+                    snap.segmentIndex,
+                    snap.snappedPoint,
+                    targetSeg,
+                    currentManeuver.location
+                )
+                if (alongPath > 0.0) alongPath else PolylineDecoder.haversineDistanceM(location, currentManeuver.location)
+            } else {
+                PolylineDecoder.haversineDistanceM(location, currentManeuver.location)
+            }
         } else {
             0.0
         }
@@ -216,9 +237,10 @@ class NavigationEngine(
 
         val targetManeuver = maneuvers.getOrNull(currentManeuverIndex) ?: return
         val distToManeuver = PolylineDecoder.haversineDistanceM(riderLocation, targetManeuver.location)
+        val targetSegment = maneuverSegmentIndices.getOrNull(currentManeuverIndex) ?: 0
 
-        // If rider is very close to or past the maneuver point, advance
-        if (distToManeuver <= MANEUVER_COMPLETION_DISTANCE_M) {
+        // Advance if rider is within completion radius OR if the rider has progressed past the target maneuver's polyline segment
+        if (distToManeuver <= MANEUVER_COMPLETION_DISTANCE_M || currentSegmentIndex > targetSegment) {
             currentManeuverIndex++
         }
     }

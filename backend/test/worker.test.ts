@@ -31,6 +31,9 @@ class MemorySimpleStorage implements SimpleStorage {
   async put<T = number>(key: string, value: T): Promise<void> {
     this.map.set(key, value);
   }
+  async delete(key: string): Promise<boolean> {
+    return this.map.delete(key);
+  }
 }
 
 describe("Hono + jose + zod Cloudflare Worker Proxy", () => {

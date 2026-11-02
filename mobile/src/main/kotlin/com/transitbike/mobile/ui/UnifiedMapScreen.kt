@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.transitbike.mobile.ui.theme.*
 import com.transitbike.shared.model.*
 import com.transitbike.shared.nav.UnitFormatter
@@ -37,8 +38,8 @@ fun UnifiedMapScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val uiState by viewModel.uiState.collectAsState()
-    val navState by viewModel.activeNavState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val navState by viewModel.activeNavState.collectAsStateWithLifecycle()
 
     val scaffoldState = rememberBottomSheetScaffoldState(
         bottomSheetState = rememberStandardBottomSheetState(

@@ -175,11 +175,16 @@ class NavigationForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        fusedLocationClient.removeLocationUpdates(locationCallback)
-        serviceScope.cancel()
-        serviceScope.launch {
-            wearSync.sendTripStop()
+        if (::locationCallback.isInitialized) {
+            fusedLocationClient.removeLocationUpdates(locationCallback)
         }
+        // Notify watch before cancelling local scope
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                wearSync.sendTripStop()
+            } catch (_: Exception) {}
+        }
+        serviceScope.cancel()
         _activeState.value = null
         _currentRoute.value = null
     }

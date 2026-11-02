@@ -42,6 +42,7 @@ export async function authenticateRequest(
     issuer: `https://securetoken.google.com/${env.FIREBASE_PROJECT_ID}`,
     audience: env.FIREBASE_PROJECT_ID,
     algorithms: ["RS256"],
+    clockTolerance: 60,
     currentDate: options.currentDate,
   });
 
@@ -52,6 +53,7 @@ export async function authenticateRequest(
       issuer: `https://firebaseappcheck.googleapis.com/${env.FIREBASE_PROJECT_NUMBER}`,
       audience: `projects/${env.FIREBASE_PROJECT_NUMBER}`,
       algorithms: ["RS256"],
+      clockTolerance: 60,
       currentDate: options.currentDate,
     }
   );

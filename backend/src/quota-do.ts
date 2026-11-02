@@ -3,6 +3,7 @@ import { Env, QuotaDecision, QuotaSnapshot } from "./types.js";
 export interface SimpleStorage {
   get<T = number>(key: string): Promise<T | undefined>;
   put<T = number>(key: string, value: T): Promise<void>;
+  delete?(key: string): Promise<boolean | void>;
 }
 
 export function formatYearMonth(epochMs: number): string {
@@ -86,6 +87,12 @@ export class QuotaEngine {
     const nextMonthly = monthlyUsed + 1;
     const nextMinute = minuteUsed + 1;
     const nextUserDaily = userDailyUsed + 1;
+
+    // Prune stale rate-limit bucket from previous minute to prevent SQLite key bloat
+    const prevMinuteKey = `ratelimit:${minuteBucket - 1}`;
+    if (this.storage.delete) {
+      await this.storage.delete(prevMinuteKey).catch(() => {});
+    }
 
     await Promise.all([
       this.storage.put(monthKey, nextMonthly),

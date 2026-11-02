@@ -63,7 +63,7 @@ export async function handlePlanRoute(c: Context<HonoEnv>) {
     query.from_lon,
     query.to_lat,
     query.to_lon,
-    "personal_bike"
+    `personal_bike:${query.locale ?? "en"}:${query.num_result ?? "3"}`
   );
 
   // 1. Check 24h edge KV cache

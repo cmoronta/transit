@@ -87,4 +87,16 @@ class PolylineDecoderTest {
         val segment2Len = PolylineDecoder.haversineDistanceM(p2, p3)
         assertEquals(segment2Len, remainingFromP2, 0.01)
     }
+
+    @Test
+    fun testPathDistanceBetweenPoints() {
+        val p1 = LatLng(33.7700, -84.3900)
+        val p2 = LatLng(33.7700, -84.3800)
+        val p3 = LatLng(33.7700, -84.3700)
+        val polyline = listOf(p1, p2, p3)
+
+        val totalPathDist = PolylineDecoder.pathDistanceBetween(polyline, 0, p1, 1, p3)
+        val fullLen = PolylineDecoder.totalLengthM(polyline)
+        assertEquals(fullLen, totalPathDist, 0.05)
+    }
 }

@@ -53,6 +53,7 @@ class WatchFallbackGpsManager(
     }
 
     fun startHeartbeatMonitor() {
+        lastPhoneUpdateMs = System.currentTimeMillis()
         scope.launch {
             while (isActive) {
                 delay(2000L)

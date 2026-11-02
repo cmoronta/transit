@@ -144,4 +144,15 @@ class NavigationEngineTest {
         assertEquals(0.0, state.remainingDistanceMeters, 0.01)
         assertEquals(0L, state.remainingDurationSeconds)
     }
+
+    @Test
+    fun testManeuverAdvancesEvenIfCyclistJumpsRadius() {
+        val engine = NavigationEngine(testRoute, clockMs = { simulatedTimeMs })
+        // pMid is at longitude -84.3800.
+        // Rider jumps past turn directly into segment 1
+        val locPast = LatLng(33.7700, -84.3795)
+        val (state, _) = engine.updateLocation(locPast, speedMps = 7.0, nowMs = simulatedTimeMs + 1000)
+        assertEquals(1, state.currentManeuverIndex)
+        assertEquals("m2", state.currentManeuver?.id)
+    }
 }

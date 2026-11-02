@@ -36,6 +36,7 @@
         <!-- Wear Listener Service for Phone Sync -->
         <service
             android:name=".sync.WearListenerService"
+            android:permission="com.google.android.gms.permission.BIND_LISTENER_INTENT"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />

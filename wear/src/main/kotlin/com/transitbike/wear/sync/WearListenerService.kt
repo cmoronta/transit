@@ -10,9 +10,13 @@ import com.transitbike.shared.model.CueEvent
 import com.transitbike.shared.model.NavState
 import com.transitbike.shared.model.RouteModel
 import com.transitbike.wear.nav.HapticCueEngine
+import com.transitbike.wear.nav.WatchFallbackGpsManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class WearListenerService : WearableListenerService() {
 
@@ -25,6 +29,20 @@ class WearListenerService : WearableListenerService() {
     }
 
     private val hapticEngine by lazy { HapticCueEngine(this) }
+    private val fallbackGpsManager by lazy {
+        WatchFallbackGpsManager(this) { cue ->
+            hapticEngine.playCueHaptic(cue)
+        }.also { manager ->
+            manager.startHeartbeatMonitor()
+            CoroutineScope(Dispatchers.Main).launch {
+                manager.fallbackState.collect { fallbackState ->
+                    if (fallbackState != null) {
+                        _syncedNavState.value = fallbackState
+                    }
+                }
+            }
+        }
+    }
 
     override fun onDataChanged(dataEvents: DataEventBuffer) {
         for (event in dataEvents) {
@@ -36,6 +54,7 @@ class WearListenerService : WearableListenerService() {
                         try {
                             val route = DataLayerContract.decodeRoute(bytes)
                             _syncedRoute.value = route
+                            fallbackGpsManager.updateCachedRoute(route)
                         } catch (_: Exception) {}
                     }
                     DataLayerContract.PATH_NAV_STATE -> {
@@ -43,6 +62,7 @@ class WearListenerService : WearableListenerService() {
                         try {
                             val state = DataLayerContract.decodeNavState(bytes)
                             _syncedNavState.value = state
+                            fallbackGpsManager.onPhoneUpdateReceived(state)
                         } catch (_: Exception) {}
                     }
                 }
@@ -60,6 +80,7 @@ class WearListenerService : WearableListenerService() {
                 } catch (_: Exception) {}
             }
             DataLayerContract.PATH_TRIP_STOP -> {
+                fallbackGpsManager.stop()
                 _syncedRoute.value = null
                 _syncedNavState.value = null
             }

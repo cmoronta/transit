@@ -123,9 +123,15 @@ object TransitV4ResponseMapper {
                 emptyList()
             }
 
-            val location = stepCoords.firstOrNull()
-                ?: routeCoordinates.getOrNull(index)
-                ?: LatLng(0.0, 0.0)
+            val location = stepCoords.firstOrNull() ?: run {
+                if (routeCoordinates.isNotEmpty()) {
+                    val targetFraction = index.toDouble() / maxOf(1, totalSteps - 1)
+                    val targetIndex = (targetFraction * (routeCoordinates.size - 1)).toInt()
+                    routeCoordinates.getOrElse(targetIndex) { routeCoordinates.first() }
+                } else {
+                    LatLng(0.0, 0.0)
+                }
+            }
 
             val type = determineManeuverType(
                 index = index,

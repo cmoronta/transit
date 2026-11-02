@@ -47,6 +47,7 @@ dependencies {
     implementation(libs.wear.tiles)
     implementation(libs.wear.complications.data.source.ktx)
     implementation(libs.wear.ongoing)
+    implementation(libs.wear)
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)
