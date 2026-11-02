@@ -1,8 +1,8 @@
 # Transit Bike Navigator: Project Status & Developer Handoff Guide
 
-> **Current Commit**: `774b3f6` (Branch: `main`)  
+> **Current Commit**: `3cd2aed` (Branch: `main`)  
 > **Repository**: [https://github.com/cmoronta/transit.git](https://github.com/cmoronta/transit.git)  
-> **Last Updated**: November 2026
+> **Last Updated**: November 2026 (Production Hardening & Audit Applied)
 
 This document is the **single source of truth** for picking up development on a new computer, onboarding a collaborator, or continuing with another AI agent.
 
@@ -63,10 +63,35 @@ All core modules are implemented, tested, and pushed to `main`:
 
 | Module | Status | Highlights |
 | :--- | :---: | :--- |
-| **`backend/`** | ✅ Complete | Modular Hono router, `jose` RS256 JWKS verification, Zod query validation, `QuotaLimiterDO` atomic rate limiting (4/min, 40/day, 1480/month), 24h KV cache, 7/7 Vitest tests passing. |
-| **`shared/`** | ✅ Complete | `@Serializable` DTOs matching Transit OpenAPI 3.1.0 schema, `TransitV4ResponseMapper` sorting by `protected_lanes_percentage` descending (`Safest · Default ★` first), `PolylineDecoder`, `NavigationEngine`, `UnitFormatter`, `DataLayerContract`, 6 JUnit test suites. |
-| **`mobile/`** | ✅ Complete | Edge-to-edge Compose single-pane layout, 3-stop drawer (Peek / Half / Full), `NavigationForegroundService` with notification, `WorkerProxyApi` + `AuthManager`, `AdminDiagnosticsSheet` (gated by `admin: true`), offline Atlanta test route fallback. |
-| **`wear/`** | ✅ Complete | Wear Compose M3 with `dynamicColorScheme`, toggleable `TurnView` & `MapView`, `HapticCueEngine` (distinct waveforms for 200m / 50m / 15m), `WatchFallbackGpsManager` (6s phone heartbeat timeout), ProtoLayout M3 `RideTileService`, `EtaComplicationService`. |
+| **`backend/`** | ✅ Complete | Modular Hono router, `jose` RS256 JWKS verification with **60s clock skew tolerance**, Zod query validation, `QuotaLimiterDO` atomic rate limiting (4/min, 40/day, 1480/month) with **stale minute bucket pruning**, 24h KV cache with **multi-lingual isolation (`locale` + `num_result`)**, 7/7 Vitest tests passing. |
+| **`shared/`** | ✅ Complete | `@Serializable` DTOs matching Transit OpenAPI 3.1.0 schema, `TransitV4ResponseMapper` sorting by `protected_lanes_percentage` descending (`Safest · Default ★` first), **zero-allocation 1 Hz GPS inner loop (`distanceToSegmentSqM`)**, **accurate winding path distance (`pathDistanceBetween`)**, **fast-cycling maneuver advancement**, 6 JUnit test suites. |
+| **`mobile/`** | ✅ Complete | Edge-to-edge Compose single-pane layout, 3-stop drawer (Peek / Half / Full), **Play Store compliant** (no `ACCESS_BACKGROUND_LOCATION`), **protected IPC listener permissions**, `NavigationForegroundService` with clean IO shutdown coroutine, `WorkerProxyApi` + `AuthManager` (live Play Integrity with debug fallback), `AdminDiagnosticsSheet` (gated by `admin: true`), offline Atlanta test route fallback. |
+| **`wear/`** | ✅ Complete | Wear Compose M3 with `dynamicColorScheme`, toggleable `TurnView` & `MapView`, **`AmbientLifecycleObserver` for Always-On Display (AOD)**, `HapticCueEngine` (distinct waveforms for 200m / 50m / 15m), **fully wired `WatchFallbackGpsManager`** (6s phone heartbeat timeout), **interactive ProtoLayout M3 `RideTileService`**, `EtaComplicationService`. |
+
+---
+
+### 2.1 Production-Readiness & Hardening Audit (Commit `3cd2aed`)
+
+A comprehensive audit was performed across all 4 modules, resulting in 14 critical fixes:
+1. **Security & Auth**:
+   - Removed `ACCESS_BACKGROUND_LOCATION` to comply with Google Play background location policies.
+   - Enforced `com.google.android.gms.permission.BIND_LISTENER_INTENT` on all Wearable listener services to block IPC spoofing.
+   - Replaced mock App Check tokens with live `FirebaseAppCheck` tokens + debug fallback.
+   - Configured `clockTolerance: 60` on edge JWT verification to eliminate spurious 401s from mobile NTP clock skew.
+2. **Performance & Hardware**:
+   - Rewrote `PolylineDecoder.findClosestPointOnPolyline` to use primitive `Double` math, eliminating ~800 heap object allocations per second during 1 Hz location tracking.
+   - Integrated `AmbientLifecycleObserver` in Wear `MainActivity` to prevent screen timeouts and enable battery-efficient AOD rendering.
+   - Added automatic pruning of expired `ratelimit:<minute>` keys in `QuotaLimiterDO` SQLite storage.
+3. **Architecture & Modularity**:
+   - Connected `WatchFallbackGpsManager` directly into `WearListenerService` so watch GPS automatically activates if phone Bluetooth drops for $>6\text{ s}$.
+   - Fixed coroutine scope shutdown race in `NavigationForegroundService.onDestroy` so `wearSync.sendTripStop()` reliably delivers before service termination.
+   - Switched UI state flows to `collectAsStateWithLifecycle()` to suppress recomposition churn when the phone is locked.
+4. **Navigation & Robustness**:
+   - Fixed fast-cycling maneuver advancement in `NavigationEngine`: maneuvers now advance if within 20 m OR if the rider's segment passes the maneuver's segment index (prevents missed turns at 25+ km/h).
+   - Replaced crow-flies straight-line distance with `pathDistanceBetween` along the actual polyline for accurate turn cue timing on curved/winding paths.
+   - Isolated KV cache keys by `locale` and `num_result` to prevent multi-lingual cache collisions.
+5. **Store Guidelines**:
+   - Added `LaunchAction` to `RideTileService` so tapping the tile directly launches the watch app.
 
 ---
 

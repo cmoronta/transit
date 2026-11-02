@@ -16,9 +16,9 @@ Turn-by-turn bike navigation for **Wear OS 4+ (API 33+)** and **Android (API 26+
 
 ---
 
-## Current Status: Ready for Physical Device Testing
+## Current Status: Production-Hardened & Ready for Physical Device Testing
 
-The codebase is completely implemented, tested, and pushed to `main` (`774b3f6`):
+The codebase is completely implemented, audited for production readiness, tested, and pushed to `main` (`3cd2aed`):
 
 1. **`backend/` (Cloudflare Worker Edge Proxy)**:
    - Built with **Hono**, **`jose`**, and **Zod**.
